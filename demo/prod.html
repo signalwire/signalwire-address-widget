@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SignalWire Address Widget — Demo</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Lexend:wght@300;400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --page: #0e0e18;
+        --surface: #181a28;
+        --raised: #222436;
+        --fg: #f0f0f4;
+        --fg-muted: #a0a0aa;
+        --border: rgba(255, 255, 255, 0.12);
+        --accent: #f72a72;
+        --brand-blue: #044ef4;
+        color-scheme: dark;
+      }
+      [data-theme='light'] {
+        --page: #fafbfc;
+        --surface: #f3f4f6;
+        --raised: #e8eaf0;
+        --fg: #1a1a18;
+        --fg-muted: #737371;
+        --border: rgba(0, 0, 0, 0.1);
+        color-scheme: light;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--page);
+        color: var(--fg);
+        font-family: 'Lexend', sans-serif;
+        line-height: 1.6;
+        min-height: 100vh;
+      }
+      header {
+        padding: 24px 32px;
+        display: flex; align-items: center; justify-content: space-between;
+        border-bottom: 1px solid var(--border);
+      }
+      header h1 {
+        margin: 0;
+        font-family: 'Instrument Sans', sans-serif;
+        font-size: 20px;
+        font-weight: 700;
+      }
+      header h1 .accent { color: var(--accent); }
+      .theme-toggle {
+        font-family: 'JetBrains Mono', monospace;
+        background: transparent;
+        color: var(--fg);
+        border: 1px solid var(--border);
+        border-radius: 100px;
+        padding: 6px 14px;
+        cursor: pointer;
+        font-size: 12px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+      .theme-toggle:hover { background: var(--raised); }
+      main {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 48px 32px;
+        display: grid;
+        gap: 40px;
+      }
+      .eyebrow {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 11px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin: 0 0 8px;
+      }
+      h2 {
+        font-family: 'Instrument Sans', sans-serif;
+        font-weight: 600;
+        font-size: 28px;
+        margin: 0 0 12px;
+      }
+      p { margin: 0 0 16px; color: var(--fg-muted); }
+      section.card {
+        padding: 28px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+      }
+      label {
+        display: block;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 11px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--fg-muted);
+        margin: 14px 0 6px;
+      }
+      input[type='text'], input[type='password'] {
+        width: 100%;
+        padding: 10px 12px;
+        background: var(--raised);
+        color: var(--fg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        font-family: 'JetBrains Mono', monospace;
+        /* 16px minimum or iOS Safari auto-zooms on focus. */
+        font-size: 16px;
+      }
+      button, a {
+        touch-action: manipulation;
+        -webkit-tap-highlight-color: transparent;
+      }
+      input:focus {
+        outline: 2px solid var(--brand-blue);
+        outline-offset: 1px;
+        border-color: transparent;
+      }
+      .launcher-row {
+        display: flex;
+        align-items: center;
+        gap: 24px;
+        flex-wrap: wrap;
+        margin-top: 24px;
+      }
+      .log {
+        margin-top: 28px;
+        padding: 14px;
+        background: var(--raised);
+        border-radius: 8px;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
+        color: var(--fg-muted);
+        max-height: 200px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+      }
+      .log:empty::before {
+        content: '(events will appear here)';
+        color: var(--fg-muted);
+      }
+      .log-row { padding: 2px 0; }
+      .log-row .ts { color: var(--fg-muted); opacity: 0.7; }
+      .log-row .kind { color: var(--accent); }
+      code {
+        font-family: 'JetBrains Mono', monospace;
+        color: var(--accent);
+        background: rgba(247, 42, 114, 0.08);
+        padding: 1px 6px;
+        border-radius: 4px;
+        font-size: 0.9em;
+      }
+    </style>
+  </head>
+  <body data-theme="dark">
+    <header>
+      <h1>Address Widget <span class="accent">demo</span></h1>
+      <button id="themeToggle" class="theme-toggle" type="button">Light mode</button>
+    </header>
+
+    <main>
+      <section class="card">
+        <p class="eyebrow">Configure</p>
+        <h2>Credentials and destination</h2>
+        <p>
+          Paste a SignalWire Subscriber Access Token (SAT) and an address to dial. Values persist in
+          <code>sessionStorage</code> for this tab only.
+        </p>
+        <label for="token">SAT token</label>
+        <input id="token" type="password" autocomplete="off" placeholder="eyJhbGciOi..." />
+        <label for="destination">Destination address</label>
+        <input id="destination" type="text" placeholder="/private/demo-1" />
+      </section>
+
+      <section class="card">
+        <p class="eyebrow">Mount form 1</p>
+        <h2>Programmatic <code>mount()</code></h2>
+        <p>
+          Calls
+          <code>SignalWireAddressWidget.mount('#target-1', {token, destination})</code> after the
+          UMD bundle loads.
+        </p>
+        <div class="launcher-row">
+          <div id="target-1"></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <p class="eyebrow">Mount form 2</p>
+        <h2>Declarative <code>&lt;signalwire-address&gt;</code></h2>
+        <p>
+          The custom element auto-registers when the UMD loads. Attributes map to the same options.
+          This instance passes its own slotted content (the span below) instead of the default
+          label.
+        </p>
+        <div class="launcher-row">
+          <signalwire-address id="declarative" label="Talk to support">
+            <span>Talk to support</span>
+          </signalwire-address>
+        </div>
+      </section>
+
+      <section class="card">
+        <p class="eyebrow">Observability</p>
+        <h2>Event log</h2>
+        <p>
+          All outbound widget CustomEvents appear here:
+          <code>signalwire-address:beforedial</code>, <code>:call-joined</code>,
+          <code>:call-left</code>, <code>:event</code>.
+        </p>
+        <div id="log" class="log"></div>
+      </section>
+    </main>
+
+    <!-- Local defaults loaded on start. File is gitignored and copied into
+         dist/ only when present. Missing is fine — demo just starts blank. -->
+    <script src="./defaults.local.js"></script>
+    <script src="./address-widget.umd.js"></script>
+    <script>
+      (function () {
+        var defaults = window.__SW_ADDRESS_DEMO_DEFAULTS__ || {};
+        var tokenInput = document.getElementById('token');
+        var destInput = document.getElementById('destination');
+        var logEl = document.getElementById('log');
+
+        tokenInput.value = sessionStorage.getItem('saw_demo_token') || defaults.token || '';
+        destInput.value = sessionStorage.getItem('saw_demo_dest') || defaults.destination || '';
+
+        function sync() {
+          programmatic.token = tokenInput.value;
+          programmatic.destination = destInput.value;
+          declarative.token = tokenInput.value;
+          declarative.destination = destInput.value;
+        }
+        tokenInput.addEventListener('input', function () {
+          sessionStorage.setItem('saw_demo_token', tokenInput.value);
+          sync();
+        });
+        destInput.addEventListener('input', function () {
+          sessionStorage.setItem('saw_demo_dest', destInput.value);
+          sync();
+        });
+
+        var programmatic = SignalWireAddressWidget.mount('#target-1', {
+          token: tokenInput.value,
+          destination: destInput.value,
+          label: 'Start call',
+          onEvent: function (e) {
+            log('onEvent', e);
+          }
+        });
+
+        var declarative = document.getElementById('declarative');
+        sync();
+
+        [programmatic, declarative].forEach(function (el) {
+          el.addEventListener('signalwire-address:beforedial', function () {
+            log('beforedial', { destination: el.destination });
+          });
+          el.addEventListener('signalwire-address:call-joined', function () {
+            log('call-joined');
+          });
+          el.addEventListener('signalwire-address:call-left', function () {
+            log('call-left');
+          });
+          el.addEventListener('signalwire-address:event', function (e) {
+            log('event', e.detail);
+          });
+        });
+
+        function log(kind, data) {
+          var row = document.createElement('div');
+          row.className = 'log-row';
+          var ts = new Date().toTimeString().slice(0, 8);
+          row.innerHTML =
+            '<span class="ts">' +
+            ts +
+            '</span> <span class="kind">' +
+            kind +
+            '</span>' +
+            (data ? ' ' + escapeHtml(JSON.stringify(data)) : '');
+          logEl.insertBefore(row, logEl.firstChild);
+        }
+        function escapeHtml(str) {
+          return str.replace(/[&<>]/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c];
+          });
+        }
+
+        var themeBtn = document.getElementById('themeToggle');
+        themeBtn.addEventListener('click', function () {
+          var next = document.body.dataset.theme === 'dark' ? 'light' : 'dark';
+          document.body.dataset.theme = next;
+          themeBtn.textContent = next === 'dark' ? 'Light mode' : 'Dark mode';
+          programmatic.theme = next;
+          declarative.theme = next;
+        });
+      })();
+    </script>
+  </body>
+</html>

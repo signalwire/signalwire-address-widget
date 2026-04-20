@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.vite/
+*.log
+.DS_Store
+.env
+.env.local
+coverage/
+.vscode/
+.idea/
+*.tgz
+
+# Local-only demo defaults: holds your SAT + destination for convenience
+# during dev. demo/defaults.example.js ships a placeholder template.
+demo/defaults.local.js

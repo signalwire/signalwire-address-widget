@@ -1,0 +1,73 @@
+{
+  "name": "@signalwire/address-widget",
+  "version": "0.1.0",
+  "description": "Embeddable SignalWire call widget. Turn any div into a launcher that opens a full-viewport video/audio call to a SignalWire address.",
+  "type": "module",
+  "main": "./dist/address-widget.umd.js",
+  "module": "./dist/address-widget.mjs",
+  "types": "./dist/address-widget.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/address-widget.d.ts",
+      "import": "./dist/address-widget.mjs",
+      "require": "./dist/address-widget.umd.js",
+      "default": "./dist/address-widget.mjs"
+    }
+  },
+  "unpkg": "./dist/address-widget.umd.js",
+  "jsdelivr": "./dist/address-widget.umd.js",
+  "files": [
+    "dist",
+    "README.md",
+    "EVENTS.md"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && tsc --emitDeclarationOnly --declaration --outDir dist/types && node scripts/flatten-types.mjs",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "type-check": "tsc --noEmit",
+    "lint": "eslint src",
+    "lint:fix": "eslint --fix src",
+    "format": "prettier --write \"src/**/*.ts\" \"demo/**/*.{ts,html}\""
+  },
+  "keywords": [
+    "signalwire",
+    "webrtc",
+    "widget",
+    "call",
+    "video",
+    "lit",
+    "web-component",
+    "embeddable"
+  ],
+  "author": "SignalWire",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/signalwire/signalwire-address-widget"
+  },
+  "dependencies": {
+    "@lit/context": "^1.1.0",
+    "@signalwire/js": "file:../signalwire-typescript-web/packages/main",
+    "@signalwire/web-components": "file:../signalwire-typescript-web/packages/web-components",
+    "dompurify": "^3.2.4",
+    "lit": "^3.2.1",
+    "marked": "^15.0.6",
+    "prismjs": "^1.29.0",
+    "rxjs": "^7.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.24",
+    "@types/prismjs": "^1.26.5",
+    "@typescript-eslint/eslint-plugin": "^8.46.3",
+    "@typescript-eslint/parser": "^8.46.3",
+    "eslint": "^9.39.1",
+    "happy-dom": "^20.4.0",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.3",
+    "vite": "^6.0.5",
+    "vitest": "^3.2.4"
+  }
+}
