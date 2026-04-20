@@ -243,6 +243,19 @@
       </section>
 
       <section class="card">
+        <p class="eyebrow">Mount form 3</p>
+        <h2>Audio-only mode</h2>
+        <p>
+          Passes <code>video: false</code>. Mic permission only, camera button hidden, and the 16:9
+          video area collapses entirely. Pass <code>poster</code> to show a custom image in its
+          place.
+        </p>
+        <div class="launcher-row">
+          <div id="target-audio"></div>
+        </div>
+      </section>
+
+      <section class="card">
         <p class="eyebrow">Observability</p>
         <h2>Event log</h2>
         <p>
@@ -288,16 +301,27 @@
       // Grab the declarative one and apply current creds to it too.
       const declarative = document.getElementById('declarative');
 
+      // Audio-only mount. No custom poster → video area collapses entirely.
+      const audioOnly = mount('#target-audio', {
+        token: tokenInput.value,
+        destination: destInput.value,
+        video: false,
+        label: 'Audio-only call',
+        onEvent: (e) => log('audio/onEvent', e)
+      });
+
       function syncCredentials() {
         programmatic.token = tokenInput.value;
         programmatic.destination = destInput.value;
         declarative.token = tokenInput.value;
         declarative.destination = destInput.value;
+        audioOnly.token = tokenInput.value;
+        audioOnly.destination = destInput.value;
       }
       syncCredentials();
 
-      // Log all widget events from both instances.
-      for (const el of [programmatic, declarative]) {
+      // Log all widget events from every instance.
+      for (const el of [programmatic, declarative, audioOnly]) {
         el.addEventListener('signalwire-address:beforedial', (e) =>
           log('beforedial', { destination: el.destination })
         );
@@ -328,6 +352,7 @@
         themeBtn.textContent = next === 'dark' ? 'Light mode' : 'Dark mode';
         programmatic.theme = next;
         declarative.theme = next;
+        audioOnly.theme = next;
       });
     </script>
   </body>

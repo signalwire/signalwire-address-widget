@@ -23,6 +23,12 @@ export interface OverlayContext {
   ariaLabel?: string;
   /** When set to 'exiting', plays the reverse animation before unmount. */
   state: 'entering' | 'open' | 'exiting';
+  /**
+   * When true, the overlay body uses a vertical stack (video-or-poster at
+   * top, transcript below) regardless of screen size. Mobile always
+   * stacks; this flag lets audio-only mode stack on desktop too.
+   */
+  stacked: boolean;
 }
 
 export const overlayStyles = css`
@@ -157,6 +163,16 @@ export const overlayStyles = css`
       padding-bottom: calc(68px + max(16px, env(safe-area-inset-bottom, 16px)));
     }
   }
+
+  /* Explicit stacked layout — applied in audio-only mode on any screen
+     size so the transcript fills vertically instead of sitting as a
+     narrow sidebar next to a mostly-empty video slot. */
+  .overlay-body[data-stacked='true'] {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding-bottom: calc(68px + max(16px, env(safe-area-inset-bottom, 16px)));
+  }
 `;
 
 const closeIcon = html`<svg
@@ -196,7 +212,7 @@ export function renderOverlay(ctx: OverlayContext): TemplateResult {
       >
         ${closeIcon}
       </button>
-      <div class="overlay-body">${ctx.body}</div>
+      <div class="overlay-body" data-stacked=${String(ctx.stacked)}>${ctx.body}</div>
       <div
         class="focus-sentinel"
         tabindex="0"

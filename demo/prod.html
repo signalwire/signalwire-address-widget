@@ -207,6 +207,19 @@
       </section>
 
       <section class="card">
+        <p class="eyebrow">Mount form 3</p>
+        <h2>Audio-only mode</h2>
+        <p>
+          Passes <code>video: false</code>. Mic permission only, camera button hidden, and the 16:9
+          video area collapses entirely. Pass <code>poster</code> to show a custom image in its
+          place.
+        </p>
+        <div class="launcher-row">
+          <div id="target-audio"></div>
+        </div>
+      </section>
+
+      <section class="card">
         <p class="eyebrow">Observability</p>
         <h2>Event log</h2>
         <p>
@@ -237,6 +250,8 @@
           programmatic.destination = destInput.value;
           declarative.token = tokenInput.value;
           declarative.destination = destInput.value;
+          audioOnly.token = tokenInput.value;
+          audioOnly.destination = destInput.value;
         }
         tokenInput.addEventListener('input', function () {
           sessionStorage.setItem('saw_demo_token', tokenInput.value);
@@ -257,9 +272,20 @@
         });
 
         var declarative = document.getElementById('declarative');
+
+        var audioOnly = SignalWireAddressWidget.mount('#target-audio', {
+          token: tokenInput.value,
+          destination: destInput.value,
+          video: false,
+          label: 'Audio-only call',
+          onEvent: function (e) {
+            log('audio/onEvent', e);
+          }
+        });
+
         sync();
 
-        [programmatic, declarative].forEach(function (el) {
+        [programmatic, declarative, audioOnly].forEach(function (el) {
           el.addEventListener('signalwire-address:beforedial', function () {
             log('beforedial', { destination: el.destination });
           });
@@ -300,6 +326,7 @@
           themeBtn.textContent = next === 'dark' ? 'Light mode' : 'Dark mode';
           programmatic.theme = next;
           declarative.theme = next;
+          audioOnly.theme = next;
         });
       })();
     </script>

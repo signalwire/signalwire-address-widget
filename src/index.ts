@@ -73,6 +73,7 @@ export function mount(target: Target, options: WidgetOptions): AddressWidget {
   if (options.theme !== undefined) widget.theme = options.theme;
   if (options.video !== undefined) widget.video = options.video;
   if (options.audio !== undefined) widget.audio = options.audio;
+  if (options.poster !== undefined) widget.poster = options.poster;
   if (options.userVariables !== undefined) {
     widget.userVariablesAttr = options.userVariables;
   }

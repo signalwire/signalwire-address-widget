@@ -108,6 +108,14 @@ export class AddressWidget extends LitElement {
 
   @property({ type: Boolean, reflect: true }) audio = true;
 
+  /**
+   * Optional custom poster image URL. In video mode it replaces the
+   * default SignalWire pre-call poster. In audio-only mode (`video=false`)
+   * it's the only visual element shown in place of the video frame; if
+   * omitted in audio-only mode, the video area collapses entirely.
+   */
+  @property({ type: String, reflect: true }) poster: string | null = null;
+
   @property({ attribute: 'user-variables', reflect: false })
   set userVariablesAttr(value: string | Record<string, unknown> | null | undefined) {
     if (value == null || value === '') {
@@ -628,7 +636,13 @@ export class AddressWidget extends LitElement {
     const hasContent = this._content !== null;
 
     return html`
-      ${renderVideoFrame({ call: this._call, ring: this._ring, audioRef: this._audioRef })}
+      ${renderVideoFrame({
+        call: this._call,
+        ring: this._ring,
+        audioRef: this._audioRef,
+        videoEnabled: this.video,
+        poster: this.poster
+      })}
       ${renderControls({
         call: this._call,
         client: this._client,
@@ -649,6 +663,7 @@ export class AddressWidget extends LitElement {
         ? renderTranscript({
             entries,
             visible: true,
+            stacked: !this.video,
             scrollRef: this._transcriptRef
           })
         : nothing}
@@ -677,6 +692,7 @@ export class AddressWidget extends LitElement {
         ? renderOverlay({
             close: () => this.close(),
             state: overlayState,
+            stacked: !this.video,
             ariaLabel: `Call ${this.destination || 'SignalWire address'}`,
             body: this._renderBody()
           })

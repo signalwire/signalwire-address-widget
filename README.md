@@ -63,10 +63,38 @@ mount('#call', {
 | `destination` | `string` | — | Address to dial, e.g. `/public/my-agent`. **Required.** |
 | `label` | `string` | `"Start call"` | Launcher label when no slotted content is provided. |
 | `theme` | `"dark" \| "light"` | `"dark"` | Color theme for the widget UI. |
-| `video` | `boolean` | `true` | Enable outgoing video. |
+| `video` | `boolean` | `true` | Enable outgoing video. When `false`, camera is never requested, the camera control is hidden, and the video area collapses entirely (unless `poster` is provided). |
 | `audio` | `boolean` | `true` | Enable outgoing audio. |
+| `poster` | `string` (URL) | — | Custom poster image. In video mode it replaces the default SignalWire pre-call image. In audio-only mode (`video=false`) it's the only visual element shown; omit to collapse the video area entirely. |
 | `user-variables` (attr) / `userVariables` (option) | JSON string / object | `{}` | Passed to the destination. Accessible server-side in SWML. |
 | `onEvent` (option) | `(e) => void` | — | Callback for every `user_event` with an unknown `type`. Programmatic only. |
+
+## Audio-only mode
+
+```html
+<!-- No camera, no video area — just controls + optional transcript + content drawer. -->
+<signalwire-address
+  token="..."
+  destination="/public/agent"
+  video="false"
+></signalwire-address>
+
+<!-- Or with a branded avatar/logo image in place of the video area: -->
+<signalwire-address
+  token="..."
+  destination="/public/agent"
+  video="false"
+  poster="https://example.com/logo.png"
+></signalwire-address>
+```
+
+```js
+SignalWireAddressWidget.mount('#t', {
+  token, destination,
+  video: false,
+  poster: 'https://example.com/logo.png'  // optional
+});
+```
 
 ## Programmatic API
 

@@ -23,6 +23,12 @@ import type { ChatEntry } from './chat-state';
 export interface TranscriptContext {
   entries: ChatEntry[];
   visible: boolean;
+  /**
+   * When true, the transcript drops the right-sidebar shape and flows as a
+   * full-width vertical panel. Set by AddressWidget in audio-only mode
+   * (and implicitly by the mobile media query).
+   */
+  stacked: boolean;
   /** Stable ref so the parent can auto-scroll the panel when new entries arrive. */
   scrollRef: Ref<HTMLDivElement>;
 }
@@ -148,6 +154,26 @@ export const transcriptStyles = css`
     }
   }
 
+  /* Explicit stacked layout — same shape as the mobile rules above, but
+     triggered by the stacked attribute regardless of screen size. */
+  .transcript[data-stacked='true'] {
+    position: relative;
+    top: auto;
+    right: auto;
+    left: auto;
+    bottom: auto;
+    width: 100%;
+    max-width: 720px;
+    margin: 0 auto;
+    height: auto;
+    flex: 1 1 0;
+    min-height: 120px;
+    border-left: none;
+    border-top: 1px solid var(--sw-address-border);
+    transform: none;
+    transition: none;
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .transcript {
       transition: none;
@@ -180,6 +206,7 @@ export function renderTranscript(ctx: TranscriptContext): TemplateResult {
       part="transcript"
       class="transcript"
       data-visible=${String(ctx.visible)}
+      data-stacked=${String(ctx.stacked)}
       aria-hidden=${String(!ctx.visible)}
       aria-label="Call transcript"
     >

@@ -28,8 +28,8 @@ import '@signalwire/web-components/participants';
 import '@signalwire/web-components/self-media';
 
 /**
- * Default SignalWire poster shown before a call is live.
- * Consumer can override via `--sw-address-poster-src: url(...)`.
+ * Default SignalWire poster shown before a call is live when no custom
+ * poster was supplied. Consumer overrides via the `poster` option/attribute.
  */
 const DEFAULT_POSTER_URL = 'https://mcdn.signalwire.com/images/v2/social_generic.png';
 
@@ -47,6 +47,18 @@ export interface VideoFrameContext {
    * silences audio going through that element alone.
    */
   audioRef: Ref<HTMLAudioElement>;
+  /**
+   * When false, the video frame collapses entirely. If `poster` is also
+   * supplied it shows in a simple centered image; otherwise nothing renders
+   * in the video slot (just the audio sink).
+   */
+  videoEnabled: boolean;
+  /**
+   * Optional custom poster URL. Overrides the default SignalWire social
+   * image. Set to `null` to use the default; empty string means "no poster
+   * at all" in audio-only mode.
+   */
+  poster: string | null;
 }
 
 export const videoFrameStyles = css`
@@ -233,9 +245,67 @@ export const videoFrameStyles = css`
       animation: none !important;
     }
   }
+
+  /* Audio-only mode. When the caller opted out of video, we don't render
+     the 16:9 frame at all. An optional custom poster becomes a centered
+     image at the top of the stacked overlay body; absence of a poster
+     collapses the visual area entirely so the overlay shows just the
+     controls and any transcript / content drawer. */
+  .audio-poster {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: clamp(24px, 6vw, 48px);
+    padding-bottom: 0;
+    position: relative;
+  }
+
+  .audio-poster img {
+    max-width: min(420px, 70%);
+    max-height: 35vh;
+    object-fit: contain;
+    user-select: none;
+    -webkit-user-drag: none;
+    filter: drop-shadow(var(--sw-address-accent-glow));
+  }
+
+  @media (max-width: 767px) {
+    .audio-poster img {
+      max-width: 70%;
+      max-height: 28vh;
+    }
+  }
 `;
 
+// The hidden audio sink is always rendered (video on or off) so the
+// remote stream's audio plays through a non-muted element.
+const audioSink = (r: Ref<HTMLAudioElement>) => html`<audio
+  ${ref(r)}
+  autoplay
+  playsinline
+  aria-hidden="true"
+  style="display:none"
+></audio>`;
+
 export function renderVideoFrame(ctx: VideoFrameContext): TemplateResult {
+  // Audio-only: skip the 16:9 frame entirely. Custom poster, if any, becomes
+  // the only visual element; otherwise the area collapses.
+  if (!ctx.videoEnabled) {
+    if (!ctx.poster) {
+      return html`${audioSink(ctx.audioRef)}`;
+    }
+    return html`
+      <div part="video-frame" class="audio-poster">
+        <img src=${ctx.poster} alt="" />
+      </div>
+      ${audioSink(ctx.audioRef)}
+    `;
+  }
+
+  // Video mode. Use custom poster when supplied, falling back to the
+  // SignalWire default for the pre-call state.
+  const posterUrl = ctx.poster ?? DEFAULT_POSTER_URL;
   return html`
     <div part="video-frame" class="video-frame">
       <div class="video-frame-inner" data-ring=${ctx.ring}>
@@ -246,19 +316,11 @@ export function renderVideoFrame(ctx: VideoFrameContext): TemplateResult {
               </sw-participants>
             </sw-call-media>`
           : html`<div class="poster">
-              <img src=${DEFAULT_POSTER_URL} alt="SignalWire" />
+              <img src=${posterUrl} alt="" />
               <div class="poster-label">Connecting call</div>
             </div>`}
       </div>
-      <!-- Hidden audio sink. sw-call-media's <video muted> plays picture only;
-           the remote stream's audio plays through this element instead. -->
-      <audio
-        ${ref(ctx.audioRef)}
-        autoplay
-        playsinline
-        aria-hidden="true"
-        style="display:none"
-      ></audio>
+      ${audioSink(ctx.audioRef)}
     </div>
   `;
 }

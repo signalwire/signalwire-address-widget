@@ -26,3 +26,5 @@ address.
   for launcher, overlay, video frame, controls, transcript, bubbles, content
   drawer, close, hangup
 - Dark mode default; opt-in light mode via `theme="light"` attribute
+- Audio-only mode via `video="false"` / `video: false`: camera control hidden,
+  video area collapses entirely unless a `poster` image URL is provided

@@ -43,6 +43,13 @@ export interface WidgetOptions {
    */
   userVariables?: Record<string, unknown>;
   /**
+   * Optional image URL shown in the video area. In video mode it sits as
+   * the pre-call poster. In audio-only mode (`video: false`) it becomes
+   * the only visual element in place of the video frame. If omitted in
+   * audio-only mode, the video area collapses entirely.
+   */
+  poster?: string;
+  /**
    * Optional raw pass-through hook for every `user_event` that doesn't match
    * a known widget handler (e.g. `display_content`). Useful for custom
    * agent-driven UI without us having to bake in support.
