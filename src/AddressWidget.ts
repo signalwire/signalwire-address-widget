@@ -171,7 +171,14 @@ export class AddressWidget extends LitElement {
   private _audioRef = createRef<HTMLAudioElement>();
   private _remoteStreamSub?: import('rxjs').Subscription;
   private _deviceSubs: import('rxjs').Subscription[] = [];
+  /** Outer subscription to `call.self$`. Tracked separately so its inner
+   *  handler doesn't accidentally unsubscribe itself. */
+  private _selfObserverSub: import('rxjs').Subscription | null = null;
+  /** Subscriptions scoped to the current self participant (audioMuted$, videoMuted$). */
   private _selfSubs: import('rxjs').Subscription[] = [];
+  /** Snapshot of the current self participant so toggle handlers don't
+   *  depend on `call.self` being populated at the moment of the click. */
+  private _self: import('@signalwire/js').CallSelfParticipant | null = null;
 
   // ─────────────────────────────────────────────────────────────────────
   // Lifecycle
@@ -353,17 +360,31 @@ export class AddressWidget extends LitElement {
       }
     });
 
-    // Track self participant's mute state so the controls dock reflects it.
-    // call.self$ emits the SelfParticipant once the call has joined; we
-    // re-subscribe to audioMuted$/videoMuted$ whenever that changes.
+    // Track self participant + its muted state so the controls dock reflects
+    // them. call.self$ emits whenever the self participant is created or
+    // replaced; on each emission we drop the old muted-state subs and set
+    // up new ones. The outer subscription is stored in _selfObserverSub so
+    // the inner cleanup can't accidentally unsubscribe itself.
+    this._selfObserverSub?.unsubscribe();
     for (const sub of this._selfSubs) sub.unsubscribe();
     this._selfSubs = [];
+    this._self = null;
     if (call.self$) {
-      const selfSub = call.self$.subscribe((self) => {
-        // Clean any previous self-scoped subs.
-        this._selfSubs.forEach((s) => s.unsubscribe());
+      this._selfObserverSub = call.self$.subscribe((self) => {
+        for (const s of this._selfSubs) s.unsubscribe();
         this._selfSubs = [];
-        if (!self) return;
+        this._self = self ?? null;
+        if (!self) {
+          this._audioMuted = false;
+          this._videoMuted = false;
+          return;
+        }
+        // Observe server-side muted state. Server updates feed through here
+        // when it accepts a mute; clicks below flip optimistically for the
+        // case where the server returns 403 and the SDK falls back to a
+        // local-only track disable (which never emits through these
+        // observables). Last write wins — if a server update arrives it
+        // replaces our optimistic value, but that value will match anyway.
         this._selfSubs.push(
           self.audioMuted$.subscribe((muted: boolean) => {
             this._audioMuted = muted;
@@ -375,7 +396,6 @@ export class AddressWidget extends LitElement {
           })
         );
       });
-      this._selfSubs.push(selfSub);
     }
 
     // Device lists + selection come from the client's DeviceController.
@@ -443,15 +463,32 @@ export class AddressWidget extends LitElement {
   }
 
   private _toggleAudio(): void {
-    const self = this._call?.self;
+    const self = this._self ?? this._call?.self;
     if (!self) return;
-    void (self.audioMuted ? self.unmute() : self.mute());
+    const wasMuted = this._audioMuted;
+    // Optimistic flip. The SDK's SelfParticipant.mute/unmute always runs
+    // `vertoManager.mute/unmuteMainAudioInputDevice()` in its finally
+    // block, so the local track state matches our optimistic flag even
+    // when the server rejects the RPC (e.g. 403 Permission denied on
+    // tokens that don't have call.mute scope). The audioMuted$ observable
+    // only emits on server-side acceptance, so relying on it alone leaves
+    // the UI stuck when the local fallback is the only thing that ran.
+    this._audioMuted = !wasMuted;
+    const action = wasMuted ? self.unmute() : self.mute();
+    Promise.resolve(action).catch((err: unknown) => {
+      console.warn('[address-widget] audio toggle error (ignored — local fallback applied):', err);
+    });
   }
 
   private _toggleVideo(): void {
-    const self = this._call?.self;
+    const self = this._self ?? this._call?.self;
     if (!self) return;
-    void (self.videoMuted ? self.unmuteVideo() : self.muteVideo());
+    const wasMuted = this._videoMuted;
+    this._videoMuted = !wasMuted;
+    const action = wasMuted ? self.unmuteVideo() : self.muteVideo();
+    Promise.resolve(action).catch((err: unknown) => {
+      console.warn('[address-widget] video toggle error (ignored — local fallback applied):', err);
+    });
   }
 
   private _selectAudioDevice(device: MediaDeviceInfo): void {
@@ -533,6 +570,8 @@ export class AddressWidget extends LitElement {
       }
       this._remoteStreamSub = undefined;
     }
+    this._selfObserverSub?.unsubscribe();
+    this._selfObserverSub = null;
     for (const sub of this._selfSubs) {
       try {
         sub.unsubscribe();
@@ -541,6 +580,7 @@ export class AddressWidget extends LitElement {
       }
     }
     this._selfSubs = [];
+    this._self = null;
     for (const sub of this._deviceSubs) {
       try {
         sub.unsubscribe();
