@@ -126,9 +126,55 @@ SignalWireAddressWidget.mount('#t', {
 });
 ```
 
+## Passing page data to the destination
+
+User variables travel on the invite and are readable on the server side (SWML `result.user_data`, or `call.user_data` depending on the agent framework). Three ways to set them, pick whichever matches the data's lifetime:
+
+**1. At mount time** — static values known when the page loads:
+```js
+SignalWireAddressWidget.mount('#t', {
+  token, destination,
+  userVariables: { plan: 'pro', accountId: '12345', source: location.pathname }
+});
+```
+
+Or via the attribute (JSON string):
+```html
+<signalwire-address
+  token="..."
+  destination="/public/agent"
+  user-variables='{"plan":"pro","accountId":"12345"}'
+></signalwire-address>
+```
+
+**2. At runtime** — any time before the user clicks the launcher:
+```js
+const widget = document.querySelector('signalwire-address');
+widget.userVariablesAttr = { cart_total: 42.50, currency: 'USD' };
+```
+
+Shallow-replaces the current variables bag.
+
+**3. Just-in-time via `beforedial`** — captured the moment the user clicks, so page state like URL params, cart contents, or the currently-logged-in user are fresh:
+```js
+widget.addEventListener('signalwire-address:beforedial', (e) => {
+  e.detail.setUserVariables({
+    page_url: location.href,
+    utm_source: new URLSearchParams(location.search).get('utm_source'),
+    user_id: window.currentUser?.id,
+    cart_total: window.cart?.total
+  });
+  // Call e.preventDefault() here to abort the dial entirely.
+});
+```
+
+`setUserVariables()` shallow-merges into whatever was set earlier at mount/runtime, so combining forms 1 or 2 with form 3 is the typical pattern: static defaults plus per-click context.
+
 ## Programmatic API
 
 ```ts
+import { mount, unmount } from '@signalwire/address-widget';
+
 const widget = mount('#call', { token, destination });
 
 // Open / close / hangup
@@ -139,6 +185,30 @@ await widget.hangup();
 // Change options at runtime (attributes reflect where applicable)
 widget.destination = '/public/other';
 widget.theme = 'light';
+widget.layout = 'stacked';
+widget.showLocalVideo = false;
+widget.poster = 'https://example.com/logo.png';
+
+// Tear down and remove from the DOM
+await unmount(widget);
+```
+
+### TypeScript exports
+
+```ts
+import {
+  mount,
+  unmount,
+  AddressWidget,            // the custom-element class
+  VERSION,
+  type WidgetOptions,
+  type Theme,               // 'dark' | 'light'
+  type Layout,              // 'auto' | 'stacked'
+  type DisplayContentPayload,
+  type UserEventPayload,
+  type BeforeDialDetail,    // detail shape on the cancelable beforedial event
+  type CallEventDetail      // detail shape on call-joined / call-left events
+} from '@signalwire/address-widget';
 ```
 
 ## Events
