@@ -32,9 +32,26 @@ export interface OverlayContext {
 }
 
 export const overlayStyles = css`
+  /* Overlay root is a native <dialog> so showModal() puts it on the browser's
+     top layer. Top-layer elements escape every containing block + stacking
+     context on the host page by spec: ancestor transform / filter /
+     backdrop-filter / will-change / contain / z-index can no longer clip or
+     cap the overlay. This is the only way to reliably embed a full-viewport
+     modal on an unknown host page. */
   .overlay {
+    /* Reset <dialog> UA defaults (centered auto-margin, border, padding,
+       max-width/height) so we get the full-viewport behavior we had with
+       the div-based overlay. */
+    padding: 0;
+    margin: 0;
+    border: none;
+    max-width: none;
+    max-height: none;
+    width: 100vw;
+    height: 100vh;
     position: fixed;
     inset: 0;
+    overflow: hidden;
     z-index: var(--sw-address-z-overlay);
     background: var(--sw-address-bg-page);
     color: var(--sw-address-fg-default);
@@ -46,6 +63,44 @@ export const overlayStyles = css`
     opacity: 0;
     will-change: transform, opacity;
     animation: overlay-enter var(--sw-address-duration-enter) var(--sw-address-ease) forwards;
+  }
+
+  /* Dialogs are display:none when closed. When opened via showModal() or
+     when the open attribute is present, the dialog paints; :modal toggles
+     modal styling if anyone wants to override. Animation runs either way. */
+  .overlay:not([open]) {
+    display: none;
+  }
+
+  /* ::backdrop inherits from its originating element, so our brand tokens
+     reach it. Paint a matching overlay backdrop for the brief moments when
+     the dialog content isn't yet fully covering the viewport (animation
+     start, odd pointer-events edge cases). */
+  .overlay::backdrop {
+    background: var(--sw-address-bg-overlay, rgba(14, 14, 24, 0.94));
+    animation: backdrop-enter var(--sw-address-duration-enter) var(--sw-address-ease) forwards;
+  }
+
+  .overlay[data-state='exiting']::backdrop {
+    animation: backdrop-exit var(--sw-address-duration-exit) var(--sw-address-ease) forwards;
+  }
+
+  @keyframes backdrop-enter {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes backdrop-exit {
+    from {
+      opacity: 1;
+    }
+    to {
+      opacity: 0;
+    }
   }
 
   .overlay[data-state='exiting'] {
@@ -184,12 +239,10 @@ const closeIcon = html`<svg
 
 export function renderOverlay(ctx: OverlayContext): TemplateResult {
   return html`
-    <div
+    <dialog
       part="overlay"
       class="overlay"
       data-state=${ctx.state}
-      role="dialog"
-      aria-modal="true"
       aria-label=${ctx.ariaLabel ?? 'Call in progress'}
     >
       <div
@@ -212,7 +265,7 @@ export function renderOverlay(ctx: OverlayContext): TemplateResult {
         tabindex="0"
         @focus=${(e: FocusEvent) => handleSentinelFocus(e, 'end')}
       ></div>
-    </div>
+    </dialog>
   `;
 }
 

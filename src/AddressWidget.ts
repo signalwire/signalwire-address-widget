@@ -284,6 +284,42 @@ export class AddressWidget extends LitElement {
     // rendered. Safe to call regardless of whether the transcript is
     // visible; it no-ops when the ref is not resolved yet.
     autoScrollTranscript(this._transcriptRef.value);
+
+    // Put the overlay <dialog> into the browser's top layer whenever it's
+    // newly present. showModal() is what escapes ancestor stacking
+    // contexts and containing blocks — the whole point of using <dialog>.
+    this._syncDialogOpen();
+  }
+
+  /**
+   * Ensure the overlay dialog's native open/closed state matches our
+   * reactive _overlayState. Called from updated() so it runs after every
+   * Lit render without needing a separate subscription.
+   */
+  private _syncDialogOpen(): void {
+    const dialog = this.shadowRoot?.querySelector<HTMLDialogElement>('dialog.overlay');
+    if (!dialog) return;
+    const shouldBeOpen =
+      this._overlayState === 'entering' || this._overlayState === 'open';
+    if (shouldBeOpen && !dialog.open) {
+      try {
+        dialog.showModal();
+      } catch {
+        // Fallback: if showModal throws (already-open race, unsupported UA),
+        // fall back to the `open` attribute — still paints, just without
+        // top-layer guarantees.
+        dialog.setAttribute('open', '');
+      }
+      // Intercept native ESC (dispatches 'cancel' before close) so our
+      // animated close path runs instead of the dialog snapping shut.
+      if (!dialog.dataset.swCancelBound) {
+        dialog.dataset.swCancelBound = '1';
+        dialog.addEventListener('cancel', (e) => {
+          e.preventDefault();
+          void this.close();
+        });
+      }
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────
@@ -344,6 +380,16 @@ export class AddressWidget extends LitElement {
     const call = this._call;
     await this._teardown();
     await this._awaitAnimation();
+    // Pull the <dialog> out of the top layer after the exit animation.
+    // Doing this before the animation would snap it invisible instantly.
+    const dialog = this.shadowRoot?.querySelector<HTMLDialogElement>('dialog.overlay');
+    if (dialog?.open) {
+      try {
+        dialog.close();
+      } catch {
+        dialog.removeAttribute('open');
+      }
+    }
     this._overlayState = 'closed';
     this._content = null;
     this._chat.reset();
@@ -810,7 +856,7 @@ export class AddressWidget extends LitElement {
   }
 
   private async _awaitAnimation(): Promise<void> {
-    const overlay = this.shadowRoot?.querySelector<HTMLElement>('.overlay');
+    const overlay = this.shadowRoot?.querySelector<HTMLElement>('dialog.overlay');
     if (!overlay) return;
     await new Promise<void>((resolve) => {
       const handler = (): void => {
