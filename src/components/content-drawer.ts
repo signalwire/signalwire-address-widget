@@ -142,6 +142,11 @@ export const contentDrawerStyles = css`
     font-family: var(--sw-address-font-body);
     font-size: 15px;
     line-height: 1.6;
+    /* Lock left-aligned: text-align inherits, and embedding hosts often
+       have text-align:center on marketing sections. Without this pin,
+       markdown paragraphs and code blocks render centered when the
+       widget is embedded in such a section. */
+    text-align: start;
   }
 
   .content-drawer-body > :first-child {

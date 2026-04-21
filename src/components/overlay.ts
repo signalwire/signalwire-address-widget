@@ -40,13 +40,19 @@ export const overlayStyles = css`
      modal on an unknown host page. */
   .overlay {
     /* Reset <dialog> UA defaults (centered auto-margin, border, padding,
-       max-width/height) so we get the full-viewport behavior we had with
-       the div-based overlay. */
+       max-width/height, text-align) so we get the full-viewport behavior
+       we had with the div-based overlay. The text-align reset is
+       load-bearing: some browsers' UA stylesheet applies text-align to
+       <dialog>, and without an explicit reset here a host page that sets
+       text-align on any ancestor of the custom element still leaks into
+       our transcript + shared-content text. The :host all:initial rule
+       covers the host element, but <dialog> has its own UA defaults. */
     padding: 0;
     margin: 0;
     border: none;
     max-width: none;
     max-height: none;
+    text-align: start;
     width: 100vw;
     height: 100vh;
     position: fixed;

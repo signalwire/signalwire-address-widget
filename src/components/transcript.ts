@@ -78,6 +78,10 @@ export const transcriptStyles = css`
     background: var(--sw-address-bg-raised);
     word-wrap: break-word;
     overflow-wrap: anywhere;
+    /* Pin text-align: host pages often set text-align on marketing
+       sections and that inherits through the shadow DOM. Bubbles must
+       read left-aligned regardless of embedding context. */
+    text-align: start;
   }
 
   .bubble[data-speaker='ai'] {
