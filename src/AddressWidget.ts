@@ -440,13 +440,13 @@ export class AddressWidget extends LitElement {
         // observables). Last write wins — if a server update arrives it
         // replaces our optimistic value, but that value will match anyway.
         this._selfSubs.push(
-          self.audioMuted$.subscribe((muted: boolean) => {
-            this._audioMuted = muted;
+          self.audioMuted$.subscribe((muted) => {
+            this._audioMuted = muted === true;
           })
         );
         this._selfSubs.push(
-          self.videoMuted$.subscribe((muted: boolean) => {
-            this._videoMuted = muted;
+          self.videoMuted$.subscribe((muted) => {
+            this._videoMuted = muted === true;
           })
         );
       });
