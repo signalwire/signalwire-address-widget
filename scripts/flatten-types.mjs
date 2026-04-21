@@ -37,6 +37,15 @@ if (existsSync(demoSrc)) {
   console.log(`[flatten-types] copied ${demoSrc} -> ${demoDst}`);
 }
 
+// Also copy the npm/CDN comparison page so `dist/npm.html` lives next to
+// the production demo when dist/ is served as a static web root.
+const npmDemoSrc = resolve(root, 'demo/npm.html');
+const npmDemoDst = resolve(root, 'dist/npm.html');
+if (existsSync(npmDemoSrc)) {
+  copyFileSync(npmDemoSrc, npmDemoDst);
+  console.log(`[flatten-types] copied ${npmDemoSrc} -> ${npmDemoDst}`);
+}
+
 // Also copy defaults.local.js if the developer has one locally. The file is
 // gitignored so CI/CD builds won't include it, but local previews will.
 const defaultsSrc = resolve(root, 'demo/defaults.local.js');
