@@ -139,15 +139,18 @@ export const overlayStyles = css`
     display: block;
   }
 
-  /* Body layout. On desktop/tablet the children are absolute-positioned
-     layers (video fills the frame, transcript is a right sidebar, drawer
-     slides in over the top). On mobile we switch to a flex column so
-     video anchors to the top, transcript flows below it, and we reserve
-     space at the bottom for the controls dock. */
+  /* Body layout. Desktop + video mode: flex row so the transcript (when
+     visible) claims the right sidebar and pushes the video-frame
+     narrower instead of overlaying it — that keeps the local self-view
+     in the bottom-right of the video area clear of the chat bubbles.
+     Mobile and explicit stacked layouts switch to flex column: video
+     anchored top, transcript filling below, controls dock reserved at
+     the bottom via padding. */
   .overlay-body {
     position: relative;
     inset: 0;
-    display: grid;
+    display: flex;
+    flex-direction: row;
     width: 100%;
     height: 100%;
     overflow: hidden;
@@ -155,22 +158,13 @@ export const overlayStyles = css`
 
   @media (max-width: 767px) {
     .overlay-body {
-      display: flex;
       flex-direction: column;
-      overflow: hidden;
-      /* Reserve height for the controls dock so transcript doesn't flow
-         underneath it. Dock is ~48px tall plus breathing room. */
       padding-bottom: calc(68px + max(16px, env(safe-area-inset-bottom, 16px)));
     }
   }
 
-  /* Explicit stacked layout — applied in audio-only mode on any screen
-     size so the transcript fills vertically instead of sitting as a
-     narrow sidebar next to a mostly-empty video slot. */
   .overlay-body[data-stacked='true'] {
-    display: flex;
     flex-direction: column;
-    overflow: hidden;
     padding-bottom: calc(68px + max(16px, env(safe-area-inset-bottom, 16px)));
   }
 `;

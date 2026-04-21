@@ -256,6 +256,19 @@
       </section>
 
       <section class="card">
+        <p class="eyebrow">Mount form 4</p>
+        <h2>Stacked layout</h2>
+        <p>
+          Passes <code>layout: 'stacked'</code>. Video sits smaller at the top (capped on desktop)
+          with the transcript flowing beneath. The self-preview overlay (default on) shows in the
+          bottom-right of the video frame — set <code>showLocalVideo: false</code> to hide it.
+        </p>
+        <div class="launcher-row">
+          <div id="target-stacked"></div>
+        </div>
+      </section>
+
+      <section class="card">
         <p class="eyebrow">Observability</p>
         <h2>Event log</h2>
         <p>
@@ -310,6 +323,15 @@
         onEvent: (e) => log('audio/onEvent', e)
       });
 
+      // Stacked layout with the self-preview shown (default).
+      const stacked = mount('#target-stacked', {
+        token: tokenInput.value,
+        destination: destInput.value,
+        layout: 'stacked',
+        label: 'Stacked call',
+        onEvent: (e) => log('stacked/onEvent', e)
+      });
+
       function syncCredentials() {
         programmatic.token = tokenInput.value;
         programmatic.destination = destInput.value;
@@ -317,11 +339,13 @@
         declarative.destination = destInput.value;
         audioOnly.token = tokenInput.value;
         audioOnly.destination = destInput.value;
+        stacked.token = tokenInput.value;
+        stacked.destination = destInput.value;
       }
       syncCredentials();
 
       // Log all widget events from every instance.
-      for (const el of [programmatic, declarative, audioOnly]) {
+      for (const el of [programmatic, declarative, audioOnly, stacked]) {
         el.addEventListener('signalwire-address:beforedial', (e) =>
           log('beforedial', { destination: el.destination })
         );
@@ -353,6 +377,7 @@
         programmatic.theme = next;
         declarative.theme = next;
         audioOnly.theme = next;
+        stacked.theme = next;
       });
     </script>
   </body>

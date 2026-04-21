@@ -7,6 +7,17 @@ import type { Call } from '@signalwire/js';
 export type Theme = 'dark' | 'light';
 
 /**
+ * Overlay layout.
+ *
+ *   - `auto` (default): sidebar on desktop when video is enabled; stacked
+ *     on mobile and in audio-only mode.
+ *   - `stacked`: always top-to-bottom — video (smaller, capped) sits at the
+ *     top, transcript fills below. Useful when the host page has its own
+ *     branding and wants the overlay to feel narrower on desktop.
+ */
+export type Layout = 'auto' | 'stacked';
+
+/**
  * Payload for a `display_content` user_event sent by the backend agent.
  * Documented publicly in EVENTS.md.
  */
@@ -36,6 +47,13 @@ export interface WidgetOptions {
   audio?: boolean;
   /** Color theme. Default `dark`. */
   theme?: Theme;
+  /**
+   * Overlay layout. `auto` keeps the sidebar look on desktop (default);
+   * `stacked` puts video on top and transcript below at every size.
+   */
+  layout?: Layout;
+  /** Show the local self-view inside the video frame. Default true. */
+  showLocalVideo?: boolean;
   /**
    * User variables passed to the destination. The backend sees them on the
    * session (`result.user_data` in SWML). Use this for plumbing hidden

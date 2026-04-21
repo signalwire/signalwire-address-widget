@@ -220,6 +220,19 @@
       </section>
 
       <section class="card">
+        <p class="eyebrow">Mount form 4</p>
+        <h2>Stacked layout</h2>
+        <p>
+          Passes <code>layout: 'stacked'</code>. Video sits smaller at the top (capped on desktop)
+          with the transcript flowing beneath. The self-preview overlay (default on) shows in the
+          bottom-right of the video frame — set <code>showLocalVideo: false</code> to hide it.
+        </p>
+        <div class="launcher-row">
+          <div id="target-stacked"></div>
+        </div>
+      </section>
+
+      <section class="card">
         <p class="eyebrow">Observability</p>
         <h2>Event log</h2>
         <p>
@@ -252,6 +265,8 @@
           declarative.destination = destInput.value;
           audioOnly.token = tokenInput.value;
           audioOnly.destination = destInput.value;
+          stacked.token = tokenInput.value;
+          stacked.destination = destInput.value;
         }
         tokenInput.addEventListener('input', function () {
           sessionStorage.setItem('saw_demo_token', tokenInput.value);
@@ -283,9 +298,19 @@
           }
         });
 
+        var stacked = SignalWireAddressWidget.mount('#target-stacked', {
+          token: tokenInput.value,
+          destination: destInput.value,
+          layout: 'stacked',
+          label: 'Stacked call',
+          onEvent: function (e) {
+            log('stacked/onEvent', e);
+          }
+        });
+
         sync();
 
-        [programmatic, declarative, audioOnly].forEach(function (el) {
+        [programmatic, declarative, audioOnly, stacked].forEach(function (el) {
           el.addEventListener('signalwire-address:beforedial', function () {
             log('beforedial', { destination: el.destination });
           });
@@ -327,6 +352,7 @@
           programmatic.theme = next;
           declarative.theme = next;
           audioOnly.theme = next;
+          stacked.theme = next;
         });
       })();
     </script>

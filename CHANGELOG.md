@@ -28,3 +28,19 @@ address.
 - Dark mode default; opt-in light mode via `theme="light"` attribute
 - Audio-only mode via `video="false"` / `video: false`: camera control hidden,
   video area collapses entirely unless a `poster` image URL is provided
+- New `layout` option accepting `"auto"` (default) or `"stacked"` — stacked
+  forces a top-to-bottom layout on every screen size with a capped smaller
+  video above and transcript flowing beneath
+- New `showLocalVideo` option (attribute `show-local-video`, default true) to
+  suppress the local self-view overlay inside the video frame
+- Local self-preview is rendered by the widget directly (own `<video>` bound
+  to `call.localStream$`) rather than via `<sw-self-media>`; the web-component
+  variant relies on MCU `layoutLayers$` that 1:1 calls don't populate, so the
+  previous implementation never drew anything on ordinary direct calls
+- Mute / unmute click flips state optimistically so the UI reflects the
+  intended mute even when the server rejects `call.mute` (e.g. 403 Permission
+  denied on tokens without the scope). The SDK's own local-track fallback
+  handles actually disabling the track; the widget just keeps the icon in sync
+- Desktop overlay uses a flex-row layout so the transcript pushes the video
+  frame narrower when it appears, instead of overlaying the right edge of
+  the video and clipping the self-preview

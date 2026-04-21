@@ -23,9 +23,11 @@ import type { TemplateResult } from 'lit';
 import type { Call } from '@signalwire/js';
 
 // Register the sub-component custom elements by import side-effect.
+// Note: we intentionally don't use <sw-self-media>/<sw-participants> — they
+// rely on MCU layoutLayers$ to position self, which 1:1 calls without a
+// layout don't populate. Instead we render our own <video> overlay bound
+// to call.localStream$.
 import '@signalwire/web-components/call-media';
-import '@signalwire/web-components/participants';
-import '@signalwire/web-components/self-media';
 
 /**
  * Default SignalWire poster shown before a call is live when no custom
@@ -59,13 +61,22 @@ export interface VideoFrameContext {
    * at all" in audio-only mode.
    */
   poster: string | null;
+  /**
+   * When false, the local-preview video overlay is omitted from the video
+   * frame. The remote video still renders as usual.
+   */
+  showLocalVideo: boolean;
+  /** Ref for the local-preview `<video>` element. AddressWidget attaches
+   *  the local MediaStream to it from `call.localStream$`. */
+  localVideoRef: Ref<HTMLVideoElement>;
 }
 
 export const videoFrameStyles = css`
   .video-frame {
     position: relative;
-    width: 100%;
-    height: 100%;
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 0;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -237,6 +248,70 @@ export const videoFrameStyles = css`
     }
   }
 
+  /* Local-preview overlay. Bottom-right corner of the video frame,
+     ~22% wide with a 16:9 aspect ratio. Mirrored for the natural
+     front-camera reading experience. Hidden when the caller opted out via
+     showLocalVideo=false. */
+  .local-preview {
+    position: absolute;
+    right: 3%;
+    bottom: 3%;
+    width: 22%;
+    min-width: 120px;
+    max-width: 220px;
+    aspect-ratio: 16 / 9;
+    border-radius: var(--sw-address-radius-sm);
+    overflow: hidden;
+    background: #000;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    box-shadow: var(--sw-address-shadow-md);
+    z-index: 2;
+    pointer-events: none;
+  }
+
+  .local-preview video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    /* Mirror so users see a front-facing reflection. */
+    transform: scaleX(-1);
+    -webkit-transform: scaleX(-1);
+    display: block;
+  }
+
+  .local-preview[hidden] {
+    display: none;
+  }
+
+  @media (max-width: 767px) {
+    .local-preview {
+      right: 8px;
+      bottom: 8px;
+      width: 28%;
+      min-width: 96px;
+      max-width: 160px;
+    }
+  }
+
+  /* Desktop + layout="stacked": the overlay body is flex-column (like
+     audio-only and mobile), but the video is still present. We shrink it
+     so the transcript that flows underneath has room to breathe. */
+  @media (min-width: 768px) {
+    :host-context(.overlay-body[data-stacked='true']) .video-frame,
+    .overlay-body[data-stacked='true'] .video-frame {
+      flex: 0 0 auto;
+      display: block;
+      padding: clamp(16px, 2.5vw, 28px);
+      padding-bottom: 0;
+      height: auto;
+    }
+    .overlay-body[data-stacked='true'] .video-frame-inner {
+      max-width: 720px;
+      max-height: 48vh;
+      margin: 0 auto;
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .video-frame-inner[data-ring]::after {
       animation: none !important;
@@ -310,15 +385,30 @@ export function renderVideoFrame(ctx: VideoFrameContext): TemplateResult {
     <div part="video-frame" class="video-frame">
       <div class="video-frame-inner" data-ring=${ctx.ring}>
         ${ctx.call
-          ? html`<sw-call-media .call=${ctx.call}>
-              <sw-participants>
-                <sw-self-media mirror></sw-self-media>
-              </sw-participants>
-            </sw-call-media>`
+          ? html`<sw-call-media .call=${ctx.call}></sw-call-media>`
           : html`<div class="poster">
               <img src=${posterUrl} alt="" />
               <div class="poster-label">Connecting call</div>
             </div>`}
+        <!-- Local self-preview. Shown only when the call is active and
+             the caller didn't opt out via showLocalVideo=false. The video
+             element is always in the DOM (hidden) so AddressWidget's
+             localStream$ subscription can attach to the ref as soon as
+             the stream becomes available. -->
+        <div
+          class="local-preview"
+          part="local-preview"
+          ?hidden=${!ctx.call || !ctx.showLocalVideo}
+          aria-hidden="true"
+        >
+          <video
+            ${ref(ctx.localVideoRef)}
+            autoplay
+            playsinline
+            muted
+            disablepictureinpicture
+          ></video>
+        </div>
       </div>
       ${audioSink(ctx.audioRef)}
     </div>

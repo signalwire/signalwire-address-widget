@@ -38,12 +38,31 @@ import { wireCallEvents } from './lib/events';
 
 import type {
   Theme,
+  Layout,
   WidgetOptions,
   DisplayContentPayload,
   UserEventPayload,
   BeforeDialDetail,
   CallEventDetail
 } from './types';
+
+/**
+ * Custom attribute converter for a boolean property whose default is
+ * `true`. Lit's built-in Boolean converter treats any attribute presence
+ * as true, so `foo="false"` resolves to true — not what we want when the
+ * default is on. This one honors the string values "false" and "0" as
+ * opt-outs and treats everything else (including empty-value presence) as
+ * on.
+ */
+const boolDefaultTrue = {
+  fromAttribute(value: string | null): boolean {
+    if (value === null) return true;
+    return value !== 'false' && value !== '0';
+  },
+  toAttribute(value: boolean): string | null {
+    return value ? null : 'false';
+  }
+};
 
 type OverlayState = 'closed' | 'entering' | 'open' | 'exiting';
 
@@ -116,6 +135,19 @@ export class AddressWidget extends LitElement {
    */
   @property({ type: String, reflect: true }) poster: string | null = null;
 
+  /**
+   * Overlay layout. `auto` = sidebar on desktop, stacked on mobile/audio;
+   * `stacked` = always stacked (video smaller on top, transcript below).
+   */
+  @property({ type: String, reflect: true }) layout: Layout = 'auto';
+
+  /**
+   * Whether to render the local self-view overlay. Default true. Attribute
+   * is `show-local-video` — use `show-local-video="false"` to hide.
+   */
+  @property({ attribute: 'show-local-video', reflect: true, converter: boolDefaultTrue })
+  showLocalVideo = true;
+
   @property({ attribute: 'user-variables', reflect: false })
   set userVariablesAttr(value: string | Record<string, unknown> | null | undefined) {
     if (value == null || value === '') {
@@ -169,7 +201,9 @@ export class AddressWidget extends LitElement {
   private _aiChunkTimer?: ReturnType<typeof setTimeout>;
   private _transcriptRef = createTranscriptRef();
   private _audioRef = createRef<HTMLAudioElement>();
+  private _localVideoRef = createRef<HTMLVideoElement>();
   private _remoteStreamSub?: import('rxjs').Subscription;
+  private _localStreamSub?: import('rxjs').Subscription;
   private _deviceSubs: import('rxjs').Subscription[] = [];
   /** Outer subscription to `call.self$`. Tracked separately so its inner
    *  handler doesn't accidentally unsubscribe itself. */
@@ -354,6 +388,26 @@ export class AddressWidget extends LitElement {
         // Best-effort play — the launcher click supplied the gesture.
         void el.play?.().catch(() => {
           /* autoplay may still fail if permissions are weird; ignore */
+        });
+      } else {
+        el.srcObject = null;
+      }
+    });
+
+    // Attach the local stream to the small self-preview overlay in the
+    // video frame. sw-self-media from @signalwire/web-components needs an
+    // MCU layoutLayers$ entry for self, which 1:1 calls don't provide, so
+    // we render our own <video> and bind localStream$ directly.
+    this._localStreamSub?.unsubscribe();
+    this._localStreamSub = call.localStream$.subscribe((stream) => {
+      const el = this._localVideoRef.value;
+      if (!el) return;
+      if (stream) {
+        if (el.srcObject !== stream) {
+          el.srcObject = stream;
+        }
+        void el.play?.().catch(() => {
+          /* autoplay may fail — the preview just stays frozen in that case */
         });
       } else {
         el.srcObject = null;
@@ -570,6 +624,16 @@ export class AddressWidget extends LitElement {
       }
       this._remoteStreamSub = undefined;
     }
+    if (this._localStreamSub) {
+      try {
+        this._localStreamSub.unsubscribe();
+      } catch {
+        /* noop */
+      }
+      this._localStreamSub = undefined;
+    }
+    const localVideoEl = this._localVideoRef.value;
+    if (localVideoEl) localVideoEl.srcObject = null;
     this._selfObserverSub?.unsubscribe();
     this._selfObserverSub = null;
     for (const sub of this._selfSubs) {
@@ -646,6 +710,15 @@ export class AddressWidget extends LitElement {
     }
   }
 
+  /**
+   * Is the overlay using the vertical-stack layout? True when the caller
+   * asked for `layout="stacked"`, or whenever video is off (audio-only
+   * always stacks; mobile already stacks via media query as a fallback).
+   */
+  private _isStacked(): boolean {
+    return this.layout === 'stacked' || !this.video;
+  }
+
   private async _awaitAnimation(): Promise<void> {
     const overlay = this.shadowRoot?.querySelector<HTMLElement>('.overlay');
     if (!overlay) return;
@@ -680,8 +753,10 @@ export class AddressWidget extends LitElement {
         call: this._call,
         ring: this._ring,
         audioRef: this._audioRef,
+        localVideoRef: this._localVideoRef,
         videoEnabled: this.video,
-        poster: this.poster
+        poster: this.poster,
+        showLocalVideo: this.showLocalVideo
       })}
       ${renderControls({
         call: this._call,
@@ -703,7 +778,7 @@ export class AddressWidget extends LitElement {
         ? renderTranscript({
             entries,
             visible: true,
-            stacked: !this.video,
+            stacked: this._isStacked(),
             scrollRef: this._transcriptRef
           })
         : nothing}
@@ -732,7 +807,7 @@ export class AddressWidget extends LitElement {
         ? renderOverlay({
             close: () => this.close(),
             state: overlayState,
-            stacked: !this.video,
+            stacked: this._isStacked(),
             ariaLabel: `Call ${this.destination || 'SignalWire address'}`,
             body: this._renderBody()
           })

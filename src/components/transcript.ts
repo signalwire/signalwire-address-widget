@@ -35,23 +35,16 @@ export interface TranscriptContext {
 
 export const transcriptStyles = css`
   .transcript {
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
+    position: relative;
+    flex: 0 0 var(--sw-address-transcript-width);
     width: var(--sw-address-transcript-width);
+    max-width: 100%;
     background: var(--sw-address-bg-surface);
     border-left: 1px solid var(--sw-address-border);
     display: flex;
     flex-direction: column;
     min-height: 0;
-    transform: translateX(100%);
-    transition: transform var(--sw-address-duration-enter) var(--sw-address-ease);
     z-index: 2;
-  }
-
-  .transcript[data-visible='true'] {
-    transform: translateX(0);
   }
 
   .transcript-header {
@@ -129,25 +122,16 @@ export const transcriptStyles = css`
     }
   }
 
-  /* Mobile: the transcript drops out of its absolute-positioned sidebar
-     mode and becomes a flex child of overlay-body, flowing below the
-     video. The controls dock still floats, and overlay-body has its own
-     bottom reservation so we end above the dock, not under it. */
+  /* Mobile: width goes to 100% and flex shifts to grow instead of the
+     fixed sidebar width. The overlay-body flips to column direction via
+     its own media query, so the transcript flows below the video. */
   @media (max-width: 767px) {
     .transcript {
-      position: relative;
-      top: auto;
-      right: auto;
-      left: auto;
-      bottom: auto;
       width: 100%;
-      height: auto;
       flex: 1 1 0;
       min-height: 120px;
       border-left: none;
       border-top: 1px solid var(--sw-address-border);
-      transform: none;
-      transition: none;
     }
     .bubble {
       max-width: 92%;
@@ -157,21 +141,13 @@ export const transcriptStyles = css`
   /* Explicit stacked layout — same shape as the mobile rules above, but
      triggered by the stacked attribute regardless of screen size. */
   .transcript[data-stacked='true'] {
-    position: relative;
-    top: auto;
-    right: auto;
-    left: auto;
-    bottom: auto;
     width: 100%;
     max-width: 720px;
     margin: 0 auto;
-    height: auto;
     flex: 1 1 0;
     min-height: 120px;
     border-left: none;
     border-top: 1px solid var(--sw-address-border);
-    transform: none;
-    transition: none;
   }
 
   @media (prefers-reduced-motion: reduce) {

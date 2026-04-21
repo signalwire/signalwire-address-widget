@@ -5,6 +5,8 @@ Embeddable SignalWire call widget. Attach to any `<div>` on your page; the widge
 - One script tag, one JS expression, self-contained UMD bundle
 - Works on any URL (localhost, CDN, your own static host)
 - Mobile-friendly, 16:9 video, full-viewport overlay with ESC + close
+- Local self-preview rendered as a picture-in-picture in the bottom-right of the video frame (toggle-able)
+- Custom mic + camera controls with built-in device pickers; mute works even when the server rejects `call.mute`
 - Reveals a transcript panel if the destination emits AI chat events
 - Opens a content drawer if the destination pushes a `display_content` user event
 - Theme-compliant to SignalWire brand tokens, overridable via CSS custom properties and `::part()` selectors
@@ -66,8 +68,36 @@ mount('#call', {
 | `video` | `boolean` | `true` | Enable outgoing video. When `false`, camera is never requested, the camera control is hidden, and the video area collapses entirely (unless `poster` is provided). |
 | `audio` | `boolean` | `true` | Enable outgoing audio. |
 | `poster` | `string` (URL) | — | Custom poster image. In video mode it replaces the default SignalWire pre-call image. In audio-only mode (`video=false`) it's the only visual element shown; omit to collapse the video area entirely. |
+| `layout` | `"auto" \| "stacked"` | `"auto"` | `auto` = sidebar on desktop when video is on, stacked on mobile/audio-only. `stacked` = always top-to-bottom with a smaller video, transcript flowing beneath, even on desktop. |
+| `show-local-video` (attr) / `showLocalVideo` (option) | `boolean` | `true` | Render the local self-view overlay inside the video frame. Set to `"false"` (attribute) or `false` (option) to hide. |
 | `user-variables` (attr) / `userVariables` (option) | JSON string / object | `{}` | Passed to the destination. Accessible server-side in SWML. |
 | `onEvent` (option) | `(e) => void` | — | Callback for every `user_event` with an unknown `type`. Programmatic only. |
+
+## Layouts
+
+```html
+<!-- Default: sidebar transcript on desktop (when video is on), stacked on mobile. -->
+<signalwire-address token="..." destination="..."></signalwire-address>
+
+<!-- Stacked: always top-to-bottom. Video capped smaller on desktop; transcript
+     flows below. Useful for narrower embeds or when the host page should read
+     more like a chat surface. -->
+<signalwire-address layout="stacked" token="..." destination="..."></signalwire-address>
+```
+
+```js
+SignalWireAddressWidget.mount('#t', { token, destination, layout: 'stacked' });
+```
+
+## Hide the self-view
+
+```html
+<signalwire-address token="..." destination="..." show-local-video="false"></signalwire-address>
+```
+
+```js
+SignalWireAddressWidget.mount('#t', { token, destination, showLocalVideo: false });
+```
 
 ## Audio-only mode
 
@@ -173,7 +203,9 @@ Full list: see `src/brand/tokens.ts` or inspect the element in devtools.
 | `overlay` | Full-viewport overlay root. |
 | `close` | Floating X button in the overlay + drawer. |
 | `video-frame` | Container around the video area. |
+| `local-preview` | Local self-view picture-in-picture inside the video frame. |
 | `controls` | Floating button dock. |
+| `hangup` | Destructive end-call pill inside the controls dock. |
 | `transcript` | Transcript panel. |
 | `bubble`, `bubble-ai`, `bubble-user` | Individual chat bubbles. |
 | `content-drawer` | Slide-in content panel. |
