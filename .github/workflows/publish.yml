@@ -1,0 +1,71 @@
+name: Publish to npm
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install
+        run: npm ci
+
+      - name: Type check
+        run: npm run type-check
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Detect version bump
+        id: version
+        run: |
+          set -euo pipefail
+          current=$(node -p "require('./package.json').version")
+          previous=$(git show HEAD~1:package.json 2>/dev/null | node -p "try { JSON.parse(require('fs').readFileSync(0,'utf8')).version } catch (e) { '' }" || echo "")
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          if [ -n "$previous" ] && [ "$current" != "$previous" ]; then
+            echo "bumped=true" >> "$GITHUB_OUTPUT"
+            echo "Version bumped: $previous -> $current"
+          else
+            echo "bumped=false" >> "$GITHUB_OUTPUT"
+            echo "Version unchanged ($current) — will publish dev release"
+          fi
+
+      - name: Publish latest
+        if: steps.version.outputs.bumped == 'true'
+        run: npm publish --tag latest --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Set dev version
+        if: steps.version.outputs.bumped != 'true'
+        run: |
+          short_sha=$(git rev-parse --short HEAD)
+          stamp=$(date -u +%Y%m%d%H%M%S)
+          npm version "${{ steps.version.outputs.current }}-dev.${stamp}.${short_sha}" --no-git-tag-version
+
+      - name: Publish dev
+        if: steps.version.outputs.bumped != 'true'
+        run: npm publish --tag dev --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

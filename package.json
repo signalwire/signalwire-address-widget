@@ -2,6 +2,9 @@
   "name": "@signalwire/address-widget",
   "version": "0.1.0",
   "description": "Embeddable SignalWire call widget. Turn any div into a launcher that opens a full-viewport video/audio call to a SignalWire address.",
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "main": "./dist/address-widget.umd.js",
   "module": "./dist/address-widget.mjs",
@@ -50,8 +53,8 @@
   },
   "dependencies": {
     "@lit/context": "^1.1.0",
-    "@signalwire/js": "file:../signalwire-typescript-web/packages/main",
-    "@signalwire/web-components": "file:../signalwire-typescript-web/packages/web-components",
+    "@signalwire/js": "dev",
+    "@signalwire/web-components": "dev",
     "dompurify": "^3.2.4",
     "lit": "^3.2.1",
     "marked": "^15.0.6",
