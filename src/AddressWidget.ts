@@ -84,6 +84,24 @@ export class AddressWidget extends LitElement {
         position: relative;
       }
 
+      /* Chat region: a wrapper for the transcript + content drawer. In
+         non-stacked mode it uses display:contents so its children behave
+         like direct flex children of overlay-body (preserves the old
+         sidebar + right-slide-drawer layout). In stacked mode it becomes
+         a flex-column that claims the middle of overlay-body, giving the
+         content drawer a positioned ancestor to absolute-overlay against. */
+      .chat-region {
+        display: contents;
+      }
+
+      .chat-region[data-stacked='true'] {
+        display: flex;
+        flex-direction: column;
+        position: relative;
+        flex: 1 1 0;
+        min-height: 0;
+      }
+
       /* Error card shown inside the overlay if dial/connect fails. */
       .error-card {
         max-width: 420px;
@@ -147,6 +165,34 @@ export class AddressWidget extends LitElement {
    */
   @property({ attribute: 'show-local-video', reflect: true, converter: boolDefaultTrue })
   showLocalVideo = true;
+
+  /** Browser echo-cancellation on the outgoing mic. Default true. */
+  @property({ attribute: 'echo-cancellation', reflect: true, converter: boolDefaultTrue })
+  echoCancellation = true;
+
+  /** Browser noise-suppression on the outgoing mic. Default true. */
+  @property({ attribute: 'noise-suppression', reflect: true, converter: boolDefaultTrue })
+  noiseSuppression = true;
+
+  /** Browser auto-gain-control on the outgoing mic. Default true. */
+  @property({ attribute: 'auto-gain-control', reflect: true, converter: boolDefaultTrue })
+  autoGainControl = true;
+
+  /**
+   * Initial microphone input volume (0–100). Applied once the call has
+   * joined via `self.setAudioInputVolume`. Leave undefined to use the
+   * destination's default.
+   */
+  @property({ attribute: 'input-volume', type: Number, reflect: true })
+  inputVolume: number | null = null;
+
+  /**
+   * Auto-populate page-context fields into userVariables at dial time.
+   * Default true. Opt out with `auto-identify="false"` (attribute) or
+   * `autoIdentify: false` (option).
+   */
+  @property({ attribute: 'auto-identify', reflect: true, converter: boolDefaultTrue })
+  autoIdentify = true;
 
   @property({ attribute: 'user-variables', reflect: false })
   set userVariablesAttr(value: string | Record<string, unknown> | null | undefined) {
@@ -256,8 +302,13 @@ export class AddressWidget extends LitElement {
       return;
     }
 
-    // Let the host cancel or mutate the userVariables right before dial.
-    const mergeVars: Record<string, unknown> = { ...this._userVariables };
+    // Build the userVariables bag in precedence order (low → high):
+    //   auto-identify defaults → widget's userVariables option → beforedial.setUserVariables
+    // Later Object.assigns override earlier ones by key.
+    const mergeVars: Record<string, unknown> = {
+      ...(this.autoIdentify ? this._buildAutoIdentify() : {}),
+      ...this._userVariables
+    };
     const detail: BeforeDialDetail = {
       setUserVariables: (vars) => Object.assign(mergeVars, vars)
     };
@@ -339,6 +390,13 @@ export class AddressWidget extends LitElement {
         destination: this.destination,
         audio: this.audio,
         video: this.video,
+        inputAudioDeviceConstraints: this.audio
+          ? {
+              echoCancellation: this.echoCancellation,
+              noiseSuppression: this.noiseSuppression,
+              autoGainControl: this.autoGainControl
+            }
+          : undefined,
         userVariables
       });
       this._call = call;
@@ -449,6 +507,19 @@ export class AddressWidget extends LitElement {
             this._videoMuted = muted === true;
           })
         );
+
+        // Apply the initial input-volume preference. One-shot, exactly
+        // once per self-emission; SDK surfaces no local fallback here, so
+        // 403s just log a warning and the server default stays in effect.
+        if (this.inputVolume != null && this.audio) {
+          const clamped = Math.max(0, Math.min(100, Number(this.inputVolume)));
+          void self.setAudioInputVolume(clamped).catch((err: unknown) => {
+            console.warn(
+              `[address-widget] setAudioInputVolume(${clamped}) failed (token may lack scope):`,
+              err
+            );
+          });
+        }
       });
     }
 
@@ -719,6 +790,25 @@ export class AddressWidget extends LitElement {
     return this.layout === 'stacked' || !this.video;
   }
 
+  /**
+   * Build the auto-identify userVariables payload. Called once at open
+   * time so `widget_opened_at` reflects the click moment, not mount time.
+   * `referrer` is omitted when the document has none to avoid sending an
+   * empty string that looks like a misconfiguration on the agent side.
+   */
+  private _buildAutoIdentify(): Record<string, unknown> {
+    const vars: Record<string, unknown> = {
+      widget_opened_at: new Date().toISOString()
+    };
+    if (typeof window !== 'undefined') {
+      vars.page_url = window.location?.href;
+      vars.page_title = document?.title;
+      vars.user_agent = navigator?.userAgent;
+      if (document?.referrer) vars.referrer = document.referrer;
+    }
+    return vars;
+  }
+
   private async _awaitAnimation(): Promise<void> {
     const overlay = this.shadowRoot?.querySelector<HTMLElement>('.overlay');
     if (!overlay) return;
@@ -774,23 +864,26 @@ export class AddressWidget extends LitElement {
         onSelectAudioDevice: (d) => this._selectAudioDevice(d),
         onSelectVideoDevice: (d) => this._selectVideoDevice(d)
       })}
-      ${hasChat
-        ? renderTranscript({
-            entries,
-            visible: true,
-            stacked: this._isStacked(),
-            scrollRef: this._transcriptRef
-          })
-        : nothing}
-      ${hasContent
-        ? renderContentDrawer({
-            content: this._content,
-            visible: true,
-            onClose: () => {
-              this._content = null;
-            }
-          })
-        : nothing}
+      <div class="chat-region" data-stacked=${String(this._isStacked())}>
+        ${hasChat
+          ? renderTranscript({
+              entries,
+              visible: true,
+              stacked: this._isStacked(),
+              scrollRef: this._transcriptRef
+            })
+          : nothing}
+        ${hasContent
+          ? renderContentDrawer({
+              content: this._content,
+              visible: true,
+              stacked: this._isStacked(),
+              onClose: () => {
+                this._content = null;
+              }
+            })
+          : nothing}
+      </div>
       <span hidden data-chat-version=${this._chatVersion}></span>
     `;
   }

@@ -277,18 +277,22 @@
           sync();
         });
 
-        var programmatic = SignalWireAddressWidget.mount('#target-1', {
+        // Shared audio-processing prefs: AGC off, 75% input volume.
+        var AUDIO = { autoGainControl: false, inputVolume: 75 };
+
+        var programmatic = SignalWireAddressWidget.mount('#target-1', Object.assign({
           token: tokenInput.value,
           destination: destInput.value,
           label: 'Start call',
           onEvent: function (e) {
             log('onEvent', e);
           }
-        });
+        }, AUDIO));
 
         var declarative = document.getElementById('declarative');
+        Object.assign(declarative, AUDIO);
 
-        var audioOnly = SignalWireAddressWidget.mount('#target-audio', {
+        var audioOnly = SignalWireAddressWidget.mount('#target-audio', Object.assign({
           token: tokenInput.value,
           destination: destInput.value,
           video: false,
@@ -296,9 +300,9 @@
           onEvent: function (e) {
             log('audio/onEvent', e);
           }
-        });
+        }, AUDIO));
 
-        var stacked = SignalWireAddressWidget.mount('#target-stacked', {
+        var stacked = SignalWireAddressWidget.mount('#target-stacked', Object.assign({
           token: tokenInput.value,
           destination: destInput.value,
           layout: 'stacked',
@@ -306,7 +310,7 @@
           onEvent: function (e) {
             log('stacked/onEvent', e);
           }
-        });
+        }, AUDIO));
 
         sync();
 

@@ -70,6 +70,11 @@ mount('#call', {
 | `poster` | `string` (URL) | — | Custom poster image. In video mode it replaces the default SignalWire pre-call image. In audio-only mode (`video=false`) it's the only visual element shown; omit to collapse the video area entirely. |
 | `layout` | `"auto" \| "stacked"` | `"auto"` | `auto` = sidebar on desktop when video is on, stacked on mobile/audio-only. `stacked` = always top-to-bottom with a smaller video, transcript flowing beneath, even on desktop. |
 | `show-local-video` (attr) / `showLocalVideo` (option) | `boolean` | `true` | Render the local self-view overlay inside the video frame. Set to `"false"` (attribute) or `false` (option) to hide. |
+| `echo-cancellation` (attr) / `echoCancellation` (option) | `boolean` | `true` | Browser echo cancellation on the outgoing mic. Set to `"false"` to capture raw audio. Applied to `getUserMedia` at dial time. |
+| `noise-suppression` (attr) / `noiseSuppression` (option) | `boolean` | `true` | Browser noise suppression on the outgoing mic. Same semantics as above. |
+| `auto-gain-control` (attr) / `autoGainControl` (option) | `boolean` | `true` | Browser automatic gain control. Turn off when the caller's mic level matters (music, raw recordings, keeping levels predictable for downstream processing). |
+| `input-volume` (attr) / `inputVolume` (option) | `number` (0–100) | — | Initial microphone input volume. Applied via `self.setAudioInputVolume` once the call has joined. Requires the token to have the `call.microphone.volume.set` scope; without it the server returns 403 and the value is ignored (we log a warning). |
+| `auto-identify` (attr) / `autoIdentify` (option) | `boolean` | `true` | Auto-populate `page_url`, `referrer`, `page_title`, `user_agent`, and `widget_opened_at` into `userVariables` at dial time. Consumer-supplied `userVariables` and `beforedial.setUserVariables` both override these by key. Set `"false"` to send nothing without explicit opt-in. |
 | `user-variables` (attr) / `userVariables` (option) | JSON string / object | `{}` | Passed to the destination. Accessible server-side in SWML. |
 | `onEvent` (option) | `(e) => void` | — | Callback for every `user_event` with an unknown `type`. Programmatic only. |
 
@@ -98,6 +103,33 @@ SignalWireAddressWidget.mount('#t', { token, destination, layout: 'stacked' });
 ```js
 SignalWireAddressWidget.mount('#t', { token, destination, showLocalVideo: false });
 ```
+
+## Audio processing
+
+Three browser audio-processing flags plus an initial input-volume are exposed as mount-time options. The three flags default to on (browser defaults). Set any of them to `false` to capture raw mic input. `inputVolume` is `undefined` by default — omit to leave the destination's default in effect.
+
+```js
+SignalWireAddressWidget.mount('#t', {
+  token, destination,
+  autoGainControl: false,   // keep user's mic level predictable
+  inputVolume: 60,          // 0-100, applied after the call joins
+  // echoCancellation: true (default)
+  // noiseSuppression: true (default)
+});
+```
+
+```html
+<signalwire-address
+  token="..."
+  destination="/public/agent"
+  auto-gain-control="false"
+  input-volume="60"
+></signalwire-address>
+```
+
+Notes:
+- `echoCancellation`, `noiseSuppression`, `autoGainControl` are applied via `getUserMedia` constraints at dial time; they can't be toggled mid-call without a new `getUserMedia` round.
+- `inputVolume` goes through a server RPC (`call.microphone.volume.set`). If the token lacks that scope the server returns 403, the widget logs a warning, and the setting doesn't apply. Unlike mute there's no SDK-side local fallback for volume.
 
 ## Audio-only mode
 
@@ -154,6 +186,18 @@ widget.userVariablesAttr = { cart_total: 42.50, currency: 'USD' };
 ```
 
 Shallow-replaces the current variables bag.
+
+**Auto-populated fields** — by default the widget merges the following into `userVariables` right before dial, so the destination sees the page context without you having to plumb it:
+
+| Key | Source |
+|---|---|
+| `page_url` | `location.href` |
+| `referrer` | `document.referrer` (omitted when empty) |
+| `page_title` | `document.title` |
+| `user_agent` | `navigator.userAgent` |
+| `widget_opened_at` | ISO timestamp of the launcher click |
+
+Anything you pass under one of these keys via `userVariables` or `setUserVariables` overrides the auto value. To turn the auto-populate off entirely, set `autoIdentify: false` (or `auto-identify="false"`).
 
 **3. Just-in-time via `beforedial`** — captured the moment the user clicks, so page state like URL params, cart contents, or the currently-logged-in user are fresh:
 ```js

@@ -303,16 +303,23 @@
         syncCredentials();
       });
 
+      // Shared audio-processing preferences for every instance on the page.
+      // These defaults are tuned for the AI-agent demo: AGC off keeps the
+      // caller's mic level predictable, 75% input volume leaves headroom.
+      const AUDIO = { autoGainControl: false, inputVolume: 75 };
+
       // Mount the programmatic widget.
       const programmatic = mount('#target-1', {
         token: tokenInput.value,
         destination: destInput.value,
         label: 'Start call',
+        ...AUDIO,
         onEvent: (e) => log('onEvent', e)
       });
 
-      // Grab the declarative one and apply current creds to it too.
+      // Grab the declarative one and apply current creds + audio prefs to it too.
       const declarative = document.getElementById('declarative');
+      Object.assign(declarative, AUDIO);
 
       // Audio-only mount. No custom poster → video area collapses entirely.
       const audioOnly = mount('#target-audio', {
@@ -320,6 +327,7 @@
         destination: destInput.value,
         video: false,
         label: 'Audio-only call',
+        ...AUDIO,
         onEvent: (e) => log('audio/onEvent', e)
       });
 
@@ -329,6 +337,7 @@
         destination: destInput.value,
         layout: 'stacked',
         label: 'Stacked call',
+        ...AUDIO,
         onEvent: (e) => log('stacked/onEvent', e)
       });
 

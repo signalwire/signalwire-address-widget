@@ -32,6 +32,13 @@ export interface ContentDrawerContext {
   content: DisplayContentPayload | null;
   visible: boolean;
   onClose: () => void;
+  /**
+   * When true, the drawer drops its absolute-positioned sidebar shape and
+   * flows as a flex sibling below the transcript (stacked / audio-only /
+   * mobile). AddressWidget sets this from the same _isStacked() flag used
+   * by the overlay + transcript.
+   */
+  stacked: boolean;
 }
 
 export const contentDrawerStyles = css`
@@ -214,6 +221,29 @@ export const contentDrawerStyles = css`
     }
   }
 
+  /* Stacked layout (audio-only or layout="stacked"): the drawer lives
+     inside the .chat-region wrapper rendered by AddressWidget, which
+     becomes the positioned ancestor. The drawer absolute-overlays the
+     transcript for the lifetime of the content push — close it and the
+     transcript underneath is intact. */
+  .content-drawer[data-stacked='true'] {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    max-width: 720px;
+    margin: 0 auto;
+    min-height: 0;
+    border-left: none;
+    border-top: none;
+    transform: none;
+    transition: none;
+    z-index: 5;
+    box-shadow: var(--sw-address-shadow-lg);
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .content-drawer {
       transition: none;
@@ -289,6 +319,7 @@ export function renderContentDrawer(ctx: ContentDrawerContext): TemplateResult {
       part="content-drawer"
       class="content-drawer"
       data-visible=${String(visible)}
+      data-stacked=${String(ctx.stacked)}
       aria-hidden=${String(!visible)}
       aria-label=${`Shared content${content?.title ? `: ${content.title}` : ''}`}
     >

@@ -55,11 +55,37 @@ export interface WidgetOptions {
   /** Show the local self-view inside the video frame. Default true. */
   showLocalVideo?: boolean;
   /**
+   * Browser audio-processing toggles, applied to `getUserMedia` constraints
+   * at dial time. All three default to `true` (the browser defaults).
+   * Set to `false` to capture raw mic audio — useful for music, accessibility
+   * tools, or when the remote side is doing its own processing.
+   */
+  echoCancellation?: boolean;
+  noiseSuppression?: boolean;
+  autoGainControl?: boolean;
+  /**
+   * Initial microphone input volume (0–100). When set, the widget calls
+   * `self.setAudioInputVolume(value)` once the call has joined. If the
+   * token lacks the `call.microphone.volume.set` scope the server returns
+   * 403 and the value simply doesn't apply (we log a warning). Omit to
+   * leave the default alone.
+   */
+  inputVolume?: number;
+  /**
    * User variables passed to the destination. The backend sees them on the
    * session (`result.user_data` in SWML). Use this for plumbing hidden
    * fields without touching attributes each call.
    */
   userVariables?: Record<string, unknown>;
+  /**
+   * Auto-populate page context into userVariables before dial. When true
+   * (the default), the widget merges `page_url`, `referrer`, `page_title`,
+   * `user_agent`, and `widget_opened_at` into userVariables just before
+   * the dial. Consumer-supplied userVariables with the same keys override
+   * the auto-populated values; a `beforedial` handler with
+   * `setUserVariables` wins last. Set to `false` for strict control.
+   */
+  autoIdentify?: boolean;
   /**
    * Optional image URL shown in the video area. In video mode it sits as
    * the pre-call poster. In audio-only mode (`video: false`) it becomes

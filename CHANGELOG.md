@@ -44,3 +44,16 @@ address.
 - Desktop overlay uses a flex-row layout so the transcript pushes the video
   frame narrower when it appears, instead of overlaying the right edge of
   the video and clipping the self-preview
+- Audio-processing options exposed at mount time: `echoCancellation`,
+  `noiseSuppression`, `autoGainControl` (all default `true`, applied via
+  `getUserMedia` constraints at dial), plus `inputVolume` (0–100, applied
+  via `self.setAudioInputVolume` once the call has joined). Demo pages
+  default to `autoGainControl: false, inputVolume: 75`.
+- New `autoIdentify` option (default `true`): page-context fields
+  (`page_url`, `referrer`, `page_title`, `user_agent`, `widget_opened_at`)
+  are merged into `userVariables` at dial time. Consumer-supplied values
+  override auto values; `beforedial.setUserVariables` wins last. Set
+  `auto-identify="false"` / `autoIdentify: false` to opt out.
+- In stacked layout, the content drawer now overlays the transcript area
+  (absolute inset:0 inside a `.chat-region` wrapper) until the user closes
+  it, instead of splitting the column with the transcript.

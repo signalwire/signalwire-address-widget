@@ -76,6 +76,11 @@ export function mount(target: Target, options: WidgetOptions): AddressWidget {
   if (options.poster !== undefined) widget.poster = options.poster;
   if (options.layout !== undefined) widget.layout = options.layout;
   if (options.showLocalVideo !== undefined) widget.showLocalVideo = options.showLocalVideo;
+  if (options.echoCancellation !== undefined) widget.echoCancellation = options.echoCancellation;
+  if (options.noiseSuppression !== undefined) widget.noiseSuppression = options.noiseSuppression;
+  if (options.autoGainControl !== undefined) widget.autoGainControl = options.autoGainControl;
+  if (options.inputVolume !== undefined) widget.inputVolume = options.inputVolume;
+  if (options.autoIdentify !== undefined) widget.autoIdentify = options.autoIdentify;
   if (options.userVariables !== undefined) {
     widget.userVariablesAttr = options.userVariables;
   }

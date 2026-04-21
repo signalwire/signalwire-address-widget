@@ -22,6 +22,12 @@ export interface ClientDialOptions {
   /** Enable outgoing video. Defaults to true. */
   video?: boolean;
   /**
+   * Audio-processing constraints fed through to `getUserMedia` via the
+   * SDK's `inputAudioDeviceConstraints` option. Typical fields:
+   * `echoCancellation`, `noiseSuppression`, `autoGainControl`.
+   */
+  inputAudioDeviceConstraints?: MediaTrackConstraints;
+  /**
    * User variables merged into the client's preferences before dial.
    * The destination receives them on the session (SWML `result.user_data`).
    */
@@ -59,6 +65,7 @@ export async function connectClient(token: string): Promise<ConnectedClient> {
     destination,
     audio = true,
     video = true,
+    inputAudioDeviceConstraints,
     userVariables
   }: ClientDialOptions): Promise<Call> {
     if (!destination) {
@@ -84,7 +91,12 @@ export async function connectClient(token: string): Promise<ConnectedClient> {
       audio,
       video,
       receiveAudio: true,
-      receiveVideo: video
+      receiveVideo: video,
+      // Only pass constraints when audio is actually enabled; passing them
+      // alongside audio:false is a no-op but keeps the log cleaner.
+      ...(audio && inputAudioDeviceConstraints
+        ? { inputAudioDeviceConstraints }
+        : {})
     });
 
     return call;
