@@ -112,12 +112,32 @@ export const brandTokens = css`
 /**
  * Utility: reset + base font stack on :host.
  * Every widget component includes this + brandTokens.
+ *
+ * `all: initial` is the shadow-boundary inheritance brake. Shadow DOM
+ * encapsulates style rules from outside, but inherited properties
+ * (text-align, font-size, font-weight, line-height, letter-spacing,
+ * text-transform, color, etc.) still flow across the boundary from the
+ * shadow host's ancestors. A host page with `.container { text-align:
+ * center; }` would unintentionally style everything inside our overlay,
+ * including user-supplied HTML/markdown/code in the content drawer.
+ *
+ * `all: initial` resets every property on :host to its CSS initial
+ * value, so nothing leaks in from outside. CSS custom properties,
+ * `direction`, and `unicode-bidi` are exempted by spec (per MDN) — so
+ * our --sw-address-* tokens still flow, and RTL pages keep working.
+ * After the reset we re-establish the handful of properties we actually
+ * want to inherit down into the shadow tree.
  */
 export const hostBase = css`
   :host {
+    all: initial;
     display: block;
     font-family: var(--sw-address-font-body);
+    font-size: 16px;
+    font-weight: 400;
+    line-height: 1.5;
     color: var(--sw-address-fg-default);
+    text-align: start;
     box-sizing: border-box;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
