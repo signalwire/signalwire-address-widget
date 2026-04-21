@@ -30,11 +30,11 @@ jobs:
       - name: Type check
         run: npm run type-check
 
-      - name: Test
-        run: npm test
-
       - name: Build
         run: npm run build
+
+      - name: Test
+        run: npm test
 
       - name: Detect version bump
         id: version
