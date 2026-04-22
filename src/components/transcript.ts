@@ -31,6 +31,10 @@ export interface TranscriptContext {
   stacked: boolean;
   /** Stable ref so the parent can auto-scroll the panel when new entries arrive. */
   scrollRef: Ref<HTMLDivElement>;
+  /** Id of the content chip whose drawer is currently open, if any. */
+  openContentId: string | null;
+  /** Fired when a content chip is clicked — reopens that payload's drawer. */
+  onContentClick: (id: string) => void;
 }
 
 export const transcriptStyles = css`
@@ -126,6 +130,97 @@ export const transcriptStyles = css`
     }
   }
 
+  /* Content chip: minimized placeholder for a display_content push.
+     Fuchsia-edged card that reads as a callable button. */
+  .content-chip {
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    background: var(--sw-address-bg-raised);
+    border: 1px solid var(--sw-address-border);
+    border-left: 2px solid var(--sw-address-accent);
+    border-radius: 10px;
+    color: var(--sw-address-fg-default);
+    font-family: var(--sw-address-font-body);
+    text-align: start;
+    cursor: pointer;
+    transition:
+      background var(--sw-address-duration-fast) var(--sw-address-ease),
+      border-color var(--sw-address-duration-fast) var(--sw-address-ease);
+  }
+
+  .content-chip:hover {
+    background: var(--sw-address-bg-subtle);
+    border-color: var(--sw-address-accent);
+  }
+
+  .content-chip:focus-visible {
+    outline: 2px solid var(--sw-address-brand-blue);
+    outline-offset: 2px;
+  }
+
+  .content-chip[data-open='true'] {
+    background: var(--sw-address-bg-subtle);
+    border-color: var(--sw-address-accent);
+  }
+
+  .content-chip-icon {
+    flex: 0 0 auto;
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    background: var(--sw-address-bg-subtle);
+    color: var(--sw-address-accent);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--sw-address-font-code);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+
+  .content-chip-body {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .content-chip-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--sw-address-fg-default);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .content-chip-preview {
+    font-family: var(--sw-address-font-code);
+    font-size: 11px;
+    color: var(--sw-address-fg-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .content-chip-open {
+    flex: 0 0 auto;
+    color: var(--sw-address-fg-muted);
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .content-chip-open svg {
+    width: 14px;
+    height: 14px;
+    display: block;
+  }
+
   /* Mobile: width goes to 100% and flex shifts to grow instead of the
      fixed sidebar width. The overlay-body flips to column direction via
      its own media query, so the transcript flows below the video. */
@@ -167,7 +262,10 @@ export const transcriptStyles = css`
 /**
  * Render a single bubble. `tabindex="-1"` so focus-trap doesn't land here.
  */
-function renderBubble(entry: ChatEntry, key: number): TemplateResult {
+function renderBubble(
+  entry: ChatEntry & { kind: 'bubble' },
+  key: number
+): TemplateResult {
   const part = entry.speaker === 'ai' ? 'bubble bubble-ai' : 'bubble bubble-user';
   return html`<div
     part=${part}
@@ -178,6 +276,63 @@ function renderBubble(entry: ChatEntry, key: number): TemplateResult {
   >
     ${entry.text}
   </div>`;
+}
+
+const openIcon = html`<svg
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  aria-hidden="true"
+>
+  <polyline points="9 18 15 12 9 6" />
+</svg>`;
+
+function iconLabel(format: 'text' | 'markdown' | 'code' | 'html'): string {
+  switch (format) {
+    case 'code':
+      return '</>';
+    case 'markdown':
+      return 'MD';
+    case 'html':
+      return '{}';
+    case 'text':
+    default:
+      return 'T';
+  }
+}
+
+function renderContentChip(
+  entry: ChatEntry & { kind: 'content' },
+  key: number,
+  openContentId: string | null,
+  onContentClick: (id: string) => void
+): TemplateResult {
+  const isOpen = entry.id === openContentId;
+  const label =
+    entry.format === 'code'
+      ? `Shared code${entry.language ? ` (${entry.language})` : ''}`
+      : entry.title;
+  return html`<button
+    part="content-chip"
+    class="content-chip"
+    type="button"
+    data-key=${key}
+    data-format=${entry.format}
+    data-open=${String(isOpen)}
+    aria-label=${`Open shared ${entry.format}: ${entry.title}`}
+    aria-expanded=${String(isOpen)}
+    @click=${() => onContentClick(entry.id)}
+  >
+    <span class="content-chip-icon" aria-hidden="true">${iconLabel(entry.format)}</span>
+    <span class="content-chip-body">
+      <span class="content-chip-title">${label}</span>
+      <span class="content-chip-preview">${entry.preview}</span>
+    </span>
+    <span class="content-chip-open" aria-hidden="true">${openIcon}</span>
+  </button>`;
 }
 
 export function renderTranscript(ctx: TranscriptContext): TemplateResult {
@@ -192,7 +347,11 @@ export function renderTranscript(ctx: TranscriptContext): TemplateResult {
     >
       <header class="transcript-header">Transcript</header>
       <div class="transcript-body" ${ref(ctx.scrollRef)}>
-        ${ctx.entries.map((e, i) => renderBubble(e, i))}
+        ${ctx.entries.map((e, i) =>
+          e.kind === 'bubble'
+            ? renderBubble(e, i)
+            : renderContentChip(e, i, ctx.openContentId, ctx.onContentClick)
+        )}
       </div>
     </aside>
   `;

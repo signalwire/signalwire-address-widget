@@ -23,16 +23,35 @@
 export type Speaker = 'ai' | 'user';
 export type EntryState = 'partial' | 'complete';
 
-export interface ChatEntry {
+/** A spoken-dialogue bubble. */
+export interface BubbleEntry {
+  kind: 'bubble';
   speaker: Speaker;
   text: string;
   state: EntryState;
 }
 
+/**
+ * A content-chip entry — a compact placeholder left in the transcript each
+ * time a `display_content` user_event is received. Clicking it reopens the
+ * full content drawer for that payload. Stored fields are enough to render
+ * the chip; the full payload lives on AddressWidget keyed by `id`.
+ */
+export interface ContentChipEntry {
+  kind: 'content';
+  id: string;
+  title: string;
+  preview: string;
+  format: 'text' | 'markdown' | 'code' | 'html';
+  language?: string;
+}
+
+export type ChatEntry = BubbleEntry | ContentChipEntry;
+
 export class ChatState {
   private _entries: ChatEntry[] = [];
-  private _aiPartial: ChatEntry | null = null;
-  private _userPartial: ChatEntry | null = null;
+  private _aiPartial: BubbleEntry | null = null;
+  private _userPartial: BubbleEntry | null = null;
   private _lastSpoken: Speaker | null = null;
 
   /** Invoked after any state change. Overridable by consumers. */
@@ -77,19 +96,19 @@ export class ChatState {
   }
 
   public onUserPartial(text: string, _barged: boolean): void {
-    this._userPartial = { speaker: 'user', text, state: 'partial' };
+    this._userPartial = { kind: 'bubble', speaker: 'user', text, state: 'partial' };
     this._lastSpoken = 'user';
     this.onUpdate();
   }
 
   public onUserComplete(text: string, _barged: boolean): void {
     if (this._userPartial) {
-      this._entries.push({ speaker: 'user', text, state: 'complete' });
+      this._entries.push({ kind: 'bubble', speaker: 'user', text, state: 'complete' });
       this._userPartial = null;
     } else {
       // Some races: speech_detect without a preceding partial. Still record
       // it so the transcript is complete.
-      this._entries.push({ speaker: 'user', text, state: 'complete' });
+      this._entries.push({ kind: 'bubble', speaker: 'user', text, state: 'complete' });
     }
     this._lastSpoken = 'user';
     this.onUpdate();
@@ -97,7 +116,7 @@ export class ChatState {
 
   public onAiChunk(text: string, _barged: boolean): void {
     if (!this._aiPartial) {
-      this._aiPartial = { speaker: 'ai', text, state: 'partial' };
+      this._aiPartial = { kind: 'bubble', speaker: 'ai', text, state: 'partial' };
     } else {
       // Chunks are space-joined — matches server utterance behavior.
       this._aiPartial.text = `${this._aiPartial.text} ${text}`.replace(/\s+/g, ' ').trim();
@@ -111,14 +130,24 @@ export class ChatState {
       // Prefer the server's final text if it provided one; otherwise keep
       // the accumulated chunks.
       const finalText = text.length > 0 ? text : this._aiPartial.text;
-      this._entries.push({ speaker: 'ai', text: finalText, state: 'complete' });
+      this._entries.push({ kind: 'bubble', speaker: 'ai', text: finalText, state: 'complete' });
       this._aiPartial = null;
     } else if (text.length > 0) {
-      this._entries.push({ speaker: 'ai', text, state: 'complete' });
+      this._entries.push({ kind: 'bubble', speaker: 'ai', text, state: 'complete' });
     }
     // If the completion was due to the user barging the AI, the turn
     // conceptually transferred to the user; otherwise it stays with AI.
     this._lastSpoken = barged ? 'user' : 'ai';
+    this.onUpdate();
+  }
+
+  /**
+   * Append a content-chip entry for a `display_content` push. The chip
+   * stays in the transcript once added; the full payload is kept on
+   * AddressWidget and looked up by id when the chip is clicked.
+   */
+  public pushContent(entry: Omit<ContentChipEntry, 'kind'>): void {
+    this._entries.push({ kind: 'content', ...entry });
     this.onUpdate();
   }
 }

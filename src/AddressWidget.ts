@@ -224,7 +224,14 @@ export class AddressWidget extends LitElement {
   @state() private _overlayState: OverlayState = 'closed';
   /** Keyed on every ChatState update so Lit re-renders the transcript. */
   @state() private _chatVersion = 0;
-  @state() private _content: DisplayContentPayload | null = null;
+  /**
+   * All display_content payloads received this call, keyed by the id we
+   * minted for them. Chips in the transcript reference these by id; the
+   * drawer renders whichever is currently open. Cleared on close().
+   */
+  private _contentHistory = new Map<string, DisplayContentPayload>();
+  /** Id of the payload whose drawer is currently open, or null when closed. */
+  @state() private _openContentId: string | null = null;
   @state() private _error: string | null = null;
   @state() private _call: Call | null = null;
   @state() private _ring: VideoFrameRing = 'none';
@@ -394,7 +401,8 @@ export class AddressWidget extends LitElement {
       }
     }
     this._overlayState = 'closed';
-    this._content = null;
+    this._contentHistory.clear();
+    this._openContentId = null;
     this._chat.reset();
     this._chatVersion++;
     this._error = null;
@@ -757,12 +765,20 @@ export class AddressWidget extends LitElement {
       }
 
       if (picked) {
-        // Always assign a fresh object reference so Lit's === comparison
-        // triggers a re-render even when the agent repeats identical
-        // content. Fresh-object plus open-state reset handles the "after
-        // X, new push doesn't render" case where the drawer needs to come
-        // back up from null.
-        this._content = picked;
+        // Mint a unique id per push so repeats become distinct chips the
+        // user can scroll back to. Store the full payload in history and
+        // auto-open the drawer on the new one; closing drops _openContentId
+        // but leaves the chip in the transcript.
+        const id = `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+        this._contentHistory.set(id, picked);
+        this._openContentId = id;
+        this._chat.pushContent({
+          id,
+          title: picked.title ?? this._defaultChipTitle(picked),
+          preview: this._buildPreview(picked),
+          format: picked.format,
+          language: picked.language
+        });
       } else {
         // eslint-disable-next-line no-console
         console.warn('[address-widget] display_content payload rejected — shape unexpected', payload);
@@ -779,6 +795,31 @@ export class AddressWidget extends LitElement {
         composed: true
       })
     );
+  }
+
+  /**
+   * Default chip title for payloads that don't supply one — keeps the chip
+   * from reading as an empty row when the agent skips `title`.
+   */
+  private _defaultChipTitle(p: DisplayContentPayload): string {
+    switch (p.format) {
+      case 'code':
+        return p.language ? `Code (${p.language})` : 'Code';
+      case 'markdown':
+        return 'Markdown';
+      case 'html':
+        return 'HTML';
+      case 'text':
+      default:
+        return 'Shared';
+    }
+  }
+
+  /** One-line preview for the chip body. Collapse whitespace and truncate. */
+  private _buildPreview(p: DisplayContentPayload): string {
+    const raw = (p.content || '').replace(/\s+/g, ' ').trim();
+    const max = 72;
+    return raw.length > max ? raw.slice(0, max - 1) + '…' : raw;
   }
 
   private _surfaceError(message: string): void {
@@ -962,7 +1003,11 @@ export class AddressWidget extends LitElement {
 
     const entries = this._chat.getHistory();
     const hasChat = entries.length > 0;
-    const hasContent = this._content !== null;
+    const openContent =
+      this._openContentId !== null
+        ? this._contentHistory.get(this._openContentId) ?? null
+        : null;
+    const hasContent = openContent !== null;
 
     return html`
       ${renderVideoFrame({
@@ -996,16 +1041,20 @@ export class AddressWidget extends LitElement {
               entries,
               visible: true,
               stacked: this._isStacked(),
-              scrollRef: this._transcriptRef
+              scrollRef: this._transcriptRef,
+              openContentId: this._openContentId,
+              onContentClick: (id) => {
+                this._openContentId = id;
+              }
             })
           : nothing}
         ${hasContent
           ? renderContentDrawer({
-              content: this._content,
+              content: openContent,
               visible: true,
               stacked: this._isStacked(),
               onClose: () => {
-                this._content = null;
+                this._openContentId = null;
               }
             })
           : nothing}
