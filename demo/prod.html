@@ -277,8 +277,8 @@
           sync();
         });
 
-        // Shared audio-processing prefs: AGC off, 75% input volume.
-        var AUDIO = { autoGainControl: false, inputVolume: 75 };
+        // Shared audio-processing prefs: AGC off, +25% mic gain (100 = unity, 200 = 2×).
+        var AUDIO = { autoGainControl: false, inputVolume: 125 };
 
         var programmatic = SignalWireAddressWidget.mount('#target-1', Object.assign({
           token: tokenInput.value,

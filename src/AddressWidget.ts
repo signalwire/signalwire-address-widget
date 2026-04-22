@@ -179,9 +179,11 @@ export class AddressWidget extends LitElement {
   autoGainControl = true;
 
   /**
-   * Initial microphone input volume (0–100). Applied once the call has
-   * joined via `self.setAudioInputVolume`. Leave undefined to use the
-   * destination's default.
+   * Initial microphone input volume as a percentage (0–200). 100 =
+   * unchanged (unity); values below 100 reduce the outgoing mic level,
+   * values above 100 boost up to 2× at 200 (the SDK's cap). Applied
+   * locally via `call.setLocalMicrophoneGain` — no server round-trip.
+   * Leave null to use the browser's natural gain.
    */
   @property({ attribute: 'input-volume', type: Number, reflect: true })
   inputVolume: number | null = null;
@@ -250,6 +252,7 @@ export class AddressWidget extends LitElement {
   private _localVideoRef = createRef<HTMLVideoElement>();
   private _remoteStreamSub?: import('rxjs').Subscription;
   private _localStreamSub?: import('rxjs').Subscription;
+  private _localGainSub?: import('rxjs').Subscription;
   private _deviceSubs: import('rxjs').Subscription[] = [];
   /** Outer subscription to `call.self$`. Tracked separately so its inner
    *  handler doesn't accidentally unsubscribe itself. */
@@ -432,17 +435,18 @@ export class AddressWidget extends LitElement {
   private async _startCall(userVariables: Record<string, unknown>): Promise<void> {
     try {
       this._client = await connectClient(this.token);
+      const constraints = this.audio
+        ? {
+            echoCancellation: this.echoCancellation,
+            noiseSuppression: this.noiseSuppression,
+            autoGainControl: this.autoGainControl
+          }
+        : undefined;
       const call = await this._client.dial({
         destination: this.destination,
         audio: this.audio,
         video: this.video,
-        inputAudioDeviceConstraints: this.audio
-          ? {
-              echoCancellation: this.echoCancellation,
-              noiseSuppression: this.noiseSuppression,
-              autoGainControl: this.autoGainControl
-            }
-          : undefined,
+        inputAudioDeviceConstraints: constraints,
         userVariables
       });
       this._call = call;
@@ -553,20 +557,51 @@ export class AddressWidget extends LitElement {
             this._videoMuted = muted === true;
           })
         );
-
-        // Apply the initial input-volume preference. One-shot, exactly
-        // once per self-emission; SDK surfaces no local fallback here, so
-        // 403s just log a warning and the server default stays in effect.
-        if (this.inputVolume != null && this.audio) {
-          const clamped = Math.max(0, Math.min(100, Number(this.inputVolume)));
-          void self.setAudioInputVolume(clamped).catch((err: unknown) => {
-            console.warn(
-              `[address-widget] setAudioInputVolume(${clamped}) failed (token may lack scope):`,
-              err
-            );
-          });
-        }
       });
+    }
+
+    // Apply the initial input-volume preference via the local Web Audio
+    // gain pipeline (call.setLocalMicrophoneGain). This is what actually
+    // affects what the remote side hears for scope-less tokens — the
+    // previously-used self.setAudioInputVolume is a server-side mix
+    // volume that requires the call.microphone.volume.set scope and
+    // doesn't touch the local track.
+    //
+    // The pipeline needs getUserMedia to have delivered a local stream
+    // first, so we wait for the first non-null emission of
+    // call.localStream$ and apply once.
+    if (this.inputVolume != null && this.audio) {
+      // inputVolume is a percentage: 100 = unchanged (unity), < 100
+      // reduces, > 100 boosts. Clamped to [0, 200] since the SDK's
+      // setLocalMicrophoneGain caps the gain multiplier at 2.
+      const pct = Math.max(0, Math.min(200, Number(this.inputVolume)));
+      const gain = pct / 100;
+      // setLocalMicrophoneGain exists on WebRTCCall (the class) in the SDK
+      // but hasn't been added to the public `Call` interface type yet.
+      // Narrow cast until the SDK types catch up. Guarded at runtime so
+      // older bundled SDKs without the method log a warning instead of
+      // throwing TypeError.
+      const gainCall = call as unknown as {
+        setLocalMicrophoneGain?: (value: number) => void;
+      };
+      if (typeof gainCall.setLocalMicrophoneGain !== 'function') {
+        console.warn(
+          '[address-widget] setLocalMicrophoneGain not available on this SDK version; inputVolume ignored'
+        );
+      } else {
+        let applied = false;
+        this._localGainSub?.unsubscribe();
+        this._localGainSub = call.localStream$.subscribe((stream) => {
+          if (stream && !applied) {
+            applied = true;
+            try {
+              gainCall.setLocalMicrophoneGain!(gain);
+            } catch (err) {
+              console.warn('[address-widget] setLocalMicrophoneGain failed:', err);
+            }
+          }
+        });
+      }
     }
 
     // Device lists + selection come from the client's DeviceController.
@@ -691,9 +726,46 @@ export class AddressWidget extends LitElement {
   private _handleUserEvent(payload: UserEventPayload): void {
     // Built-in: display_content opens the content drawer.
     if (payload.type === 'display_content') {
-      const p = payload as unknown as DisplayContentPayload;
-      if (typeof p.content === 'string' && typeof p.format === 'string') {
-        this._content = p;
+      const p = payload as unknown as DisplayContentPayload & Record<string, unknown>;
+      // Tolerant extraction: the agent may send content/format at the top
+      // level or nested under data/payload/body. format defaults to 'text'
+      // when missing so a bare string still lands somewhere. Anything we
+      // can coerce to a usable shape wins; otherwise we log the rejection
+      // so the reason is visible in devtools.
+      const src = (p as { data?: unknown; payload?: unknown; body?: unknown });
+      const candidates: Array<Record<string, unknown>> = [p];
+      if (src.data && typeof src.data === 'object') candidates.push(src.data as Record<string, unknown>);
+      if (src.payload && typeof src.payload === 'object') candidates.push(src.payload as Record<string, unknown>);
+      if (src.body && typeof src.body === 'object') candidates.push(src.body as Record<string, unknown>);
+
+      let picked: DisplayContentPayload | null = null;
+      for (const c of candidates) {
+        const content = c.content;
+        if (typeof content !== 'string') continue;
+        const format =
+          typeof c.format === 'string'
+            ? (c.format as DisplayContentPayload['format'])
+            : 'text';
+        picked = {
+          type: 'display_content',
+          content,
+          format,
+          title: typeof c.title === 'string' ? c.title : undefined,
+          language: typeof c.language === 'string' ? c.language : undefined
+        } as DisplayContentPayload;
+        break;
+      }
+
+      if (picked) {
+        // Always assign a fresh object reference so Lit's === comparison
+        // triggers a re-render even when the agent repeats identical
+        // content. Fresh-object plus open-state reset handles the "after
+        // X, new push doesn't render" case where the drawer needs to come
+        // back up from null.
+        this._content = picked;
+      } else {
+        // eslint-disable-next-line no-console
+        console.warn('[address-widget] display_content payload rejected — shape unexpected', payload);
       }
     }
 
@@ -748,6 +820,14 @@ export class AddressWidget extends LitElement {
         /* noop */
       }
       this._localStreamSub = undefined;
+    }
+    if (this._localGainSub) {
+      try {
+        this._localGainSub.unsubscribe();
+      } catch {
+        /* noop */
+      }
+      this._localGainSub = undefined;
     }
     const localVideoEl = this._localVideoRef.value;
     if (localVideoEl) localVideoEl.srcObject = null;

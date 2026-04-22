@@ -305,8 +305,9 @@
 
       // Shared audio-processing preferences for every instance on the page.
       // These defaults are tuned for the AI-agent demo: AGC off keeps the
-      // caller's mic level predictable, 75% input volume leaves headroom.
-      const AUDIO = { autoGainControl: false, inputVolume: 75 };
+      // caller's mic level predictable, +25% input gain compensates for
+      // quiet mics (100 = unity, 200 = 2×, see WidgetOptions.inputVolume).
+      const AUDIO = { autoGainControl: false, inputVolume: 125 };
 
       // Mount the programmatic widget.
       const programmatic = mount('#target-1', {
