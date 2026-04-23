@@ -150,4 +150,24 @@ export class ChatState {
     this._entries.push({ kind: 'content', ...entry });
     this.onUpdate();
   }
+
+  /**
+   * Bulk-replace the completed entries with a snapshot. Used on reattach
+   * to rehydrate from sessionStorage before any live subscriptions fire.
+   * Partials are cleared — they're always in-flight, never persisted.
+   */
+  public loadSnapshot(entries: ChatEntry[]): void {
+    this._entries = entries.filter(
+      (e) => e.kind === 'content' || (e.kind === 'bubble' && e.state === 'complete')
+    );
+    this._aiPartial = null;
+    this._userPartial = null;
+    this._lastSpoken = null;
+    this.onUpdate();
+  }
+
+  /** Return the committed (non-partial) entries in insertion order. */
+  public getCommittedEntries(): ChatEntry[] {
+    return [...this._entries];
+  }
 }

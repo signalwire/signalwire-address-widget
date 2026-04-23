@@ -59,7 +59,16 @@ export async function connectClient(token: string): Promise<ConnectedClient> {
   }
 
   const provider = new StaticCredentialProvider({ token });
-  const client = new SignalWire(provider);
+  // `reconnectAttachedCalls` + `persistSession` together let the SDK
+  // reattach to an active call after a page reload: it stores active
+  // call IDs in sessionStorage and, when the same session comes back,
+  // waits for the server-pushed `verto.attach`. `client.session.calls`
+  // then exposes the reattached Call. Our own AddressWidget is the thing
+  // that maps that Call → "reopen the overlay for widget <widgetId>".
+  const client = new SignalWire(provider, {
+    reconnectAttachedCalls: true,
+    persistSession: true
+  });
 
   async function dial({
     destination,

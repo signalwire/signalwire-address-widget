@@ -31,11 +31,24 @@ import { controlsStyles, renderControls } from './components/controls';
 import { transcriptStyles, renderTranscript, createTranscriptRef, autoScrollTranscript } from './components/transcript';
 import { contentDrawerStyles, renderContentDrawer } from './components/content-drawer';
 import { ChatState } from './components/chat-state';
+import { bannerStyles, renderBanner } from './components/banner';
+import type { BannerMessage } from './components/banner';
 
 import { connectClient } from './lib/client';
 import type { ConnectedClient } from './lib/client';
 import { wireCallEvents } from './lib/events';
 import { detectPlatform, safeTimezone, safeMatchMedia } from './lib/env';
+import {
+  readValidLast,
+  writeLast,
+  clearLast,
+  readChat,
+  writeChat,
+  readContent,
+  writeContent,
+  clearCall,
+  sweepOrphans
+} from './lib/persistence';
 
 import type {
   Theme,
@@ -79,6 +92,7 @@ export class AddressWidget extends LitElement {
     controlsStyles,
     transcriptStyles,
     contentDrawerStyles,
+    bannerStyles,
     css`
       :host {
         display: inline-block;
@@ -199,6 +213,30 @@ export class AddressWidget extends LitElement {
   @property({ attribute: 'auto-identify', reflect: true, converter: boolDefaultTrue })
   autoIdentify = true;
 
+  /**
+   * Stable identifier for this widget instance. Used to scope
+   * sessionStorage entries for reattach so a call started from one
+   * widget on the page is reopened in the same widget after reload.
+   *
+   * When omitted, we assign `address-widget-<N>` where N is the zero-
+   * based position of this element in document order among all
+   * `<signalwire-address>` elements. That default works for static
+   * pages. Set explicitly when the widget's DOM position may shift
+   * between reloads (e.g. CMS-managed layouts).
+   */
+  @property({ attribute: 'widget-id', reflect: true }) widgetId = '';
+
+  /**
+   * Reattach to an active call after a page reload. When true (the
+   * default), the widget eagerly connects the SignalWire client on
+   * mount if sessionStorage shows this widget-id was the last one with
+   * a live call, waits for the server-pushed `verto.attach`, and
+   * auto-opens the overlay with the transcript/content rehydrated.
+   * Set to `false` to disable surprise auto-opens on reload.
+   */
+  @property({ attribute: 'auto-reattach', reflect: true, converter: boolDefaultTrue })
+  autoReattach = true;
+
   @property({ attribute: 'user-variables', reflect: false })
   set userVariablesAttr(value: string | Record<string, unknown> | null | undefined) {
     if (value == null || value === '') {
@@ -244,6 +282,15 @@ export class AddressWidget extends LitElement {
   @state() private _videoInputDevices: MediaDeviceInfo[] = [];
   @state() private _selectedAudioInputId: string | null = null;
   @state() private _selectedVideoInputId: string | null = null;
+  /** Inline status banner shown at the top of the overlay body. */
+  @state() private _banner: BannerMessage | null = null;
+  /**
+   * Insertion-ordered content ids so persisted content can be rehydrated
+   * in the same order the user saw them. `_contentHistory` is a Map but
+   * Map iteration order is only stable if we never re-key; keeping a
+   * parallel array is explicit and safe to serialize.
+   */
+  private _contentOrder: string[] = [];
 
   // ─────────────────────────────────────────────────────────────────────
   // Private fields
@@ -272,6 +319,14 @@ export class AddressWidget extends LitElement {
   /** Snapshot of the current self participant so toggle handlers don't
    *  depend on `call.self` being populated at the moment of the click. */
   private _self: import('@signalwire/js').CallSelfParticipant | null = null;
+  private _recoveryEventSub?: import('rxjs').Subscription;
+  private _bannerTimer?: ReturnType<typeof setTimeout>;
+  /** Deferred auto-open when reattach completes while the tab is hidden. */
+  private _pendingAutoOpen: (() => void) | null = null;
+  private _visibilityHandler?: () => void;
+  /** True while `_attemptReattach` is running. Prevents a launcher
+   *  click from racing with the eager client connect. */
+  private _reattaching = false;
 
   // ─────────────────────────────────────────────────────────────────────
   // Lifecycle
@@ -282,7 +337,27 @@ export class AddressWidget extends LitElement {
     loadBrandFonts();
     this._chat.onUpdate = () => {
       this._chatVersion++;
+      this._persistChat();
     };
+    // Assign a stable widget id before any reattach logic runs so we can
+    // key sessionStorage by it. Explicit widget-id attribute wins;
+    // otherwise we use the zero-based document-order index among all
+    // <signalwire-address> elements on the page.
+    if (!this.widgetId) {
+      try {
+        const all = document.querySelectorAll('signalwire-address');
+        const idx = Array.prototype.indexOf.call(all, this);
+        this.widgetId = idx >= 0 ? `address-widget-${idx}` : 'address-widget-0';
+      } catch {
+        this.widgetId = 'address-widget-0';
+      }
+    }
+    // Sweep this widget's stale orphans on every mount. Safe to call
+    // whether or not we actually reattach.
+    sweepOrphans(this.widgetId);
+    if (this.autoReattach) {
+      void this._attemptReattach();
+    }
   }
 
   override disconnectedCallback(): void {
@@ -290,6 +365,14 @@ export class AddressWidget extends LitElement {
     void this._teardown();
     unlockBodyScroll(this._previousBodyOverflow);
     this._removeEscHandler();
+    if (this._visibilityHandler) {
+      document.removeEventListener('visibilitychange', this._visibilityHandler);
+      this._visibilityHandler = undefined;
+    }
+    if (this._bannerTimer) {
+      clearTimeout(this._bannerTimer);
+      this._bannerTimer = undefined;
+    }
   }
 
   override updated(): void {
@@ -342,6 +425,9 @@ export class AddressWidget extends LitElement {
   /** Open the overlay and begin dialing. */
   async open(): Promise<void> {
     if (this._overlayState !== 'closed') return;
+    // Let an in-flight reattach finish (or fail) before we start a
+    // fresh dial — otherwise we'd double-connect the client.
+    if (this._reattaching) return;
     if (!this.token) {
       this._surfaceError('Missing token. Configure the `token` attribute or mount option.');
       return;
@@ -412,9 +498,23 @@ export class AddressWidget extends LitElement {
       }
     }
     this._overlayState = 'closed';
+    // Snapshot the callId before clearing so the storage-cleanup call
+    // below can reference the right keys.
+    const closedCallId = call?.id ?? null;
     this._contentHistory.clear();
+    this._contentOrder = [];
     this._openContentId = null;
+    this._banner = null;
+    if (this._bannerTimer) {
+      clearTimeout(this._bannerTimer);
+      this._bannerTimer = undefined;
+    }
     this._chat.reset();
+    if (closedCallId) {
+      clearCall(this.widgetId, closedCallId);
+    } else {
+      clearLast();
+    }
     this._chatVersion++;
     this._error = null;
     this._ring = 'none';
@@ -469,6 +569,15 @@ export class AddressWidget extends LitElement {
         userVariables
       });
       this._call = call;
+
+      // Record this widget as the owner of the active call so a page
+      // reload can route reattach back here. Persisted chat/content
+      // entries start empty and grow as events arrive.
+      writeLast({
+        widgetId: this.widgetId,
+        callId: call.id,
+        destination: this.destination
+      });
 
       this._wireCallStateObservables(call);
       this._unwireEvents = wireCallEvents(call, {
@@ -658,6 +767,61 @@ export class AddressWidget extends LitElement {
         }
       });
     }
+
+    // Surface recovery pipeline events as plain-language banners.
+    // `reinvite_started`        → "Reconnecting…" (stays until succeeded/failed)
+    // `reinvite_succeeded`      → "Connection restored" (auto-dismiss)
+    // `max_attempts_reached`    → "Connection lost", close overlay
+    // `call_recovery_failed`    → same as max_attempts_reached
+    // `video_disabled`          → inform user of bandwidth-driven video pause
+    // `video_restored`          → confirm restoration
+    this._recoveryEventSub?.unsubscribe();
+    const recoveryEvent$ = (call as unknown as {
+      recoveryEvent$?: import('rxjs').Observable<{ action: string; reason?: string }>;
+    }).recoveryEvent$;
+    if (recoveryEvent$) {
+      this._recoveryEventSub = recoveryEvent$.subscribe((event) => {
+        switch (event.action) {
+          case 'reinvite_started':
+          case 'call_recovering':
+            this._showBanner({ level: 'warning', text: 'Reconnecting…' });
+            break;
+          case 'reinvite_succeeded':
+          case 'call_recovered':
+            this._showBanner(
+              { level: 'success', text: 'Connection restored', dismissible: true },
+              3000
+            );
+            break;
+          case 'max_attempts_reached':
+          case 'call_recovery_failed':
+            this._showBanner({ level: 'error', text: 'Connection lost', dismissible: false });
+            if (this._call) {
+              clearCall(this.widgetId, this._call.id);
+            }
+            void this.close();
+            break;
+          case 'video_disabled':
+            this._showBanner(
+              {
+                level: 'info',
+                text: 'Video paused to maintain audio quality',
+                dismissible: true
+              },
+              5000
+            );
+            break;
+          case 'video_restored':
+            this._showBanner(
+              { level: 'success', text: 'Video restored', dismissible: true },
+              3000
+            );
+            break;
+          default:
+            break;
+        }
+      });
+    }
   }
 
   private _wireDeviceObservables(): void {
@@ -782,6 +946,7 @@ export class AddressWidget extends LitElement {
         // but leaves the chip in the transcript.
         const id = `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
         this._contentHistory.set(id, picked);
+        this._contentOrder.push(id);
         this._openContentId = id;
         this._chat.pushContent({
           id,
@@ -790,6 +955,7 @@ export class AddressWidget extends LitElement {
           format: picked.format,
           language: picked.language
         });
+        this._persistContent();
       } else {
         // eslint-disable-next-line no-console
         console.warn('[address-widget] display_content payload rejected — shape unexpected', payload);
@@ -831,6 +997,180 @@ export class AddressWidget extends LitElement {
     const raw = (p.content || '').replace(/\s+/g, ' ').trim();
     const max = 72;
     return raw.length > max ? raw.slice(0, max - 1) + '…' : raw;
+  }
+
+  /**
+   * Try to reopen an active call left over from before a page reload.
+   *   1. Read `swaw:last`. If missing / stale / for a different widget,
+   *      stay closed (sweep already ran in connectedCallback).
+   *   2. Eager-connect the client and wait briefly for the server to
+   *      push `verto.attach`, which surfaces the call on
+   *      `client.session.calls`.
+   *   3. If we find a call whose `.to` matches our destination,
+   *      rehydrate chat + content history, open the overlay, and wire
+   *      the normal live subscriptions.
+   *   4. On any failure / no-match / timeout, disconnect the eager
+   *      client and clear the stored pointer so a user click doesn't
+   *      inherit confusing state.
+   */
+  private async _attemptReattach(): Promise<void> {
+    const last = readValidLast();
+    if (!last || last.widgetId !== this.widgetId) return;
+    // Token required to connect. Without it we can't reattach; leave
+    // the pointer alone so a later caller that supplies the token can
+    // still use it.
+    if (!this.token) return;
+
+    this._reattaching = true;
+    let client: ConnectedClient;
+    try {
+      client = await connectClient(this.token);
+    } catch {
+      clearCall(this.widgetId, last.callId);
+      this._reattaching = false;
+      return;
+    }
+
+    const deadline = Date.now() + 5000;
+    let matched: Call | null = null;
+    while (Date.now() < deadline) {
+      const calls = (client.client.session?.calls ?? []) as Call[];
+      matched = calls.find((c) => (c as unknown as { to?: string }).to === last.destination) ?? null;
+      if (matched) break;
+      await new Promise<void>((resolve) => setTimeout(resolve, 250));
+    }
+
+    if (!matched) {
+      try {
+        client.disconnect();
+      } catch {
+        /* noop */
+      }
+      clearCall(this.widgetId, last.callId);
+      this._reattaching = false;
+      return;
+    }
+
+    // Rehydrate in-memory state from the snapshot before the overlay
+    // flashes open, so first paint already shows history.
+    const chatSnap = readChat(this.widgetId, last.callId);
+    if (chatSnap) this._chat.loadSnapshot(chatSnap);
+    const contentSnap = readContent(this.widgetId, last.callId);
+    if (contentSnap) {
+      this._contentHistory.clear();
+      this._contentOrder = [];
+      for (const { id, payload } of contentSnap) {
+        this._contentHistory.set(id, payload);
+        this._contentOrder.push(id);
+      }
+    }
+
+    // Store the call + rewrite a fresh snapshot + `last` pointer so a
+    // second reload during the live portion still has data to load.
+    this._client = client;
+    this._call = matched;
+    this._persistChat();
+    this._persistContent();
+    writeLast({
+      widgetId: this.widgetId,
+      callId: last.callId,
+      destination: this.destination
+    });
+
+    const open = (): void => {
+      this._previousBodyOverflow = lockBodyScroll();
+      this._overlayState = 'entering';
+      this._installEscHandler();
+      requestAnimationFrame(() => {
+        if (this._overlayState === 'entering') this._overlayState = 'open';
+      });
+      this._showBanner(
+        { level: 'success', text: 'Reconnected to call', dismissible: true },
+        4000
+      );
+      // Wire the live subscriptions after the overlay is committed so
+      // the inner refs (audio sink, local video) exist.
+      void this.updateComplete.then(() => {
+        if (!this._call) return;
+        this._wireCallStateObservables(this._call);
+        this._unwireEvents = wireCallEvents(this._call, {
+          onUserPartial: (text, barged) => this._chat.onUserPartial(text, barged),
+          onUserComplete: (text, barged) => this._chat.onUserComplete(text, barged),
+          onAiChunk: (text, barged) => {
+            this._chat.onAiChunk(text, barged);
+            this._startAiSpeakingRing();
+          },
+          onAiComplete: (text, barged) => {
+            this._chat.onAiComplete(text, barged);
+            this._stopAiSpeakingRing();
+          },
+          onUserEvent: (payload) => this._handleUserEvent(payload)
+        });
+      });
+    };
+
+    this._reattaching = false;
+    if (document.visibilityState === 'visible') {
+      open();
+    } else {
+      this._pendingAutoOpen = open;
+      this._visibilityHandler = (): void => {
+        if (document.visibilityState === 'visible' && this._pendingAutoOpen) {
+          const pending = this._pendingAutoOpen;
+          this._pendingAutoOpen = null;
+          if (this._visibilityHandler) {
+            document.removeEventListener('visibilitychange', this._visibilityHandler);
+            this._visibilityHandler = undefined;
+          }
+          pending();
+        }
+      };
+      document.addEventListener('visibilitychange', this._visibilityHandler);
+    }
+  }
+
+  /**
+   * Write the current transcript snapshot to sessionStorage. Called on
+   * every ChatState update; partials are filtered out at serialization
+   * time via `getCommittedEntries` so we only persist stable rows.
+   */
+  private _persistChat(): void {
+    if (!this._call) return;
+    writeChat(this.widgetId, this._call.id, this._chat.getCommittedEntries());
+  }
+
+  /**
+   * Serialize the insertion-ordered content history so rehydration
+   * preserves the chip order the user saw before reload.
+   */
+  private _persistContent(): void {
+    if (!this._call) return;
+    const entries = this._contentOrder
+      .map((id) => {
+        const payload = this._contentHistory.get(id);
+        return payload ? { id, payload } : null;
+      })
+      .filter((x): x is { id: string; payload: DisplayContentPayload } => x !== null);
+    writeContent(this.widgetId, this._call.id, entries);
+  }
+
+  /**
+   * Show a status banner. When `autoDismissMs` is set, clears itself
+   * after that many ms; otherwise sticks until the user or a later
+   * call replaces it.
+   */
+  private _showBanner(message: BannerMessage, autoDismissMs?: number): void {
+    if (this._bannerTimer) {
+      clearTimeout(this._bannerTimer);
+      this._bannerTimer = undefined;
+    }
+    this._banner = message;
+    if (autoDismissMs && autoDismissMs > 0) {
+      this._bannerTimer = setTimeout(() => {
+        this._banner = null;
+        this._bannerTimer = undefined;
+      }, autoDismissMs);
+    }
   }
 
   private _surfaceError(message: string): void {
@@ -880,6 +1220,14 @@ export class AddressWidget extends LitElement {
         /* noop */
       }
       this._localGainSub = undefined;
+    }
+    if (this._recoveryEventSub) {
+      try {
+        this._recoveryEventSub.unsubscribe();
+      } catch {
+        /* noop */
+      }
+      this._recoveryEventSub = undefined;
     }
     const localVideoEl = this._localVideoRef.value;
     if (localVideoEl) localVideoEl.srcObject = null;
@@ -1084,6 +1432,16 @@ export class AddressWidget extends LitElement {
     const hasContent = openContent !== null;
 
     return html`
+      ${renderBanner({
+        message: this._banner,
+        onDismiss: () => {
+          this._banner = null;
+          if (this._bannerTimer) {
+            clearTimeout(this._bannerTimer);
+            this._bannerTimer = undefined;
+          }
+        }
+      })}
       ${renderVideoFrame({
         call: this._call,
         ring: this._ring,

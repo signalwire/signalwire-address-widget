@@ -100,6 +100,26 @@ export interface WidgetOptions {
    */
   autoIdentify?: boolean;
   /**
+   * Stable identifier for this widget instance. Scopes the
+   * sessionStorage entries the widget uses for reattach across page
+   * reloads. When omitted, an auto-id of `address-widget-<N>` is
+   * assigned based on the element's zero-based document-order position
+   * among `<signalwire-address>` elements — good enough for static
+   * pages. Set explicitly when widget order may shift between reloads.
+   */
+  widgetId?: string;
+  /**
+   * Reattach to an active call after a page reload. Default true. When
+   * on, the widget opens its client on mount if sessionStorage shows
+   * this widget-id was the last one with a live call, waits for the
+   * server-pushed `verto.attach`, and auto-opens the overlay with the
+   * transcript and content history rehydrated. Honors
+   * `document.visibilityState`: if the tab is hidden at reattach time,
+   * the auto-open waits for the user to return to the tab. Set to
+   * `false` to disable surprise dialogs on reload.
+   */
+  autoReattach?: boolean;
+  /**
    * Optional image URL shown in the video area. In video mode it sits as
    * the pre-call poster. In audio-only mode (`video: false`) it becomes
    * the only visual element in place of the video frame. If omitted in
