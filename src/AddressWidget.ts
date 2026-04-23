@@ -701,18 +701,16 @@ export class AddressWidget extends LitElement {
     // call.localStream$ and apply once.
     if (this.inputVolume != null && this.audio) {
       // Both our public `inputVolume` and the SDK's
-      // `call.setLocalMicrophoneGain(value)` are now on the same 0..200
-      // percentage scale (100 = unity). The SDK clamps to [0, 200] and
-      // divides internally to produce the Web Audio multiplier, so we
-      // pass the percentage through as-is — previously we were dividing
-      // by 100 locally, which after the SDK contract change turned
-      // inputVolume: 125 into 0.0125 = effective mute.
+      // `call.setLocalMicrophoneGain(value)` are on the same 0..200
+      // percentage scale (100 = unity). Pass it through as-is.
+      //
+      // `setLocalMicrophoneGain` exists on the WebRTCCall class but
+      // isn't surfaced on the public `Call` interface type yet, so we
+      // narrow via `as` for the TS side. Runtime access is a direct
+      // method call on the same instance object.
       const pct = Math.max(0, Math.min(200, Number(this.inputVolume)));
-      // setLocalMicrophoneGain exists on WebRTCCall (the class) in the
-      // SDK but isn't part of the public `Call` interface type yet.
-      // Narrow cast until the SDK types catch up.
       const gainCall = call as unknown as {
-        setLocalMicrophoneGain: (value: number) => void;
+        setLocalMicrophoneGain(value: number): void;
       };
       let applied = false;
       this._localGainSub?.unsubscribe();
