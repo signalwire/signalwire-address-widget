@@ -28,17 +28,24 @@ describe('ChatState', () => {
     state.onUserPartial('hell', false);
     let hist = state.getHistory();
     expect(hist).toHaveLength(1);
-    expect(hist[0]).toEqual({ speaker: 'user', text: 'hell', state: 'partial' });
+    expect(hist[0]).toEqual({ kind: 'bubble', speaker: 'user', text: 'hell', state: 'partial' });
 
     state.onUserPartial('hello world', false);
     hist = state.getHistory();
     expect(hist).toHaveLength(1);
-    expect(hist[0].text).toBe('hello world');
+    const first = hist[0];
+    expect(first.kind).toBe('bubble');
+    if (first.kind === 'bubble') expect(first.text).toBe('hello world');
 
     state.onUserComplete('hello world.', false);
     hist = state.getHistory();
     expect(hist).toHaveLength(1);
-    expect(hist[0]).toEqual({ speaker: 'user', text: 'hello world.', state: 'complete' });
+    expect(hist[0]).toEqual({
+      kind: 'bubble',
+      speaker: 'user',
+      text: 'hello world.',
+      state: 'complete'
+    });
     expect(state.lastSpoken).toBe('user');
   });
 
@@ -48,6 +55,7 @@ describe('ChatState', () => {
     let hist = state.getHistory();
     expect(hist).toHaveLength(1);
     expect(hist[0]).toEqual({
+      kind: 'bubble',
       speaker: 'ai',
       text: 'Welcome to SignalWire.',
       state: 'partial'
@@ -56,7 +64,9 @@ describe('ChatState', () => {
     state.onAiComplete('Welcome to SignalWire.', false);
     hist = state.getHistory();
     expect(hist).toHaveLength(1);
-    expect(hist[0].state).toBe('complete');
+    const entry = hist[0];
+    expect(entry.kind).toBe('bubble');
+    if (entry.kind === 'bubble') expect(entry.state).toBe('complete');
     expect(state.lastSpoken).toBe('ai');
   });
 
@@ -67,10 +77,15 @@ describe('ChatState', () => {
 
     // Two live partials — user was most recent, so user shows last.
     expect(hist).toHaveLength(2);
-    expect(hist[0].speaker).toBe('ai');
-    expect(hist[0].state).toBe('partial');
-    expect(hist[1].speaker).toBe('user');
-    expect(hist[1].state).toBe('partial');
+    const [a, b] = hist;
+    expect(a.kind).toBe('bubble');
+    expect(b.kind).toBe('bubble');
+    if (a.kind === 'bubble' && b.kind === 'bubble') {
+      expect(a.speaker).toBe('ai');
+      expect(a.state).toBe('partial');
+      expect(b.speaker).toBe('user');
+      expect(b.state).toBe('partial');
+    }
     expect(state.lastSpoken).toBe('user');
   });
 
@@ -83,8 +98,9 @@ describe('ChatState', () => {
     // AI partial is promoted to a complete entry, user partial still live.
     const hist = state.getHistory();
     expect(hist).toHaveLength(2);
-    const aiEntries = hist.filter((e) => e.speaker === 'ai');
-    const userEntries = hist.filter((e) => e.speaker === 'user');
+    const bubbles = hist.filter((e): e is Extract<typeof e, { kind: 'bubble' }> => e.kind === 'bubble');
+    const aiEntries = bubbles.filter((e) => e.speaker === 'ai');
+    const userEntries = bubbles.filter((e) => e.speaker === 'user');
     expect(aiEntries).toHaveLength(1);
     expect(aiEntries[0].state).toBe('complete');
     expect(userEntries).toHaveLength(1);
@@ -95,14 +111,24 @@ describe('ChatState', () => {
     state.onUserComplete('hi there', false);
     const hist = state.getHistory();
     expect(hist).toHaveLength(1);
-    expect(hist[0]).toEqual({ speaker: 'user', text: 'hi there', state: 'complete' });
+    expect(hist[0]).toEqual({
+      kind: 'bubble',
+      speaker: 'user',
+      text: 'hi there',
+      state: 'complete'
+    });
   });
 
   it('records an ai_complete without a prior chunk if text is non-empty', () => {
     state.onAiComplete('Hello!', false);
     const hist = state.getHistory();
     expect(hist).toHaveLength(1);
-    expect(hist[0]).toEqual({ speaker: 'ai', text: 'Hello!', state: 'complete' });
+    expect(hist[0]).toEqual({
+      kind: 'bubble',
+      speaker: 'ai',
+      text: 'Hello!',
+      state: 'complete'
+    });
   });
 
   it('ignores an ai_complete with empty text and no prior chunk', () => {
@@ -126,7 +152,10 @@ describe('ChatState', () => {
     state.onAiComplete("It's 3 PM.", false);
 
     const hist = state.getHistory();
-    expect(hist.map((e) => `${e.speaker}:${e.state}:${e.text}`)).toEqual([
+    const summary = hist.map((e) =>
+      e.kind === 'bubble' ? `${e.speaker}:${e.state}:${e.text}` : `content:${e.id}`
+    );
+    expect(summary).toEqual([
       'user:complete:hello.',
       'ai:complete:Hi, how can I help?',
       "user:complete:what's the time?",
