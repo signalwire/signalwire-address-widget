@@ -83,12 +83,20 @@ export interface WidgetOptions {
    */
   userVariables?: Record<string, unknown>;
   /**
-   * Auto-populate page context into userVariables before dial. When true
-   * (the default), the widget merges `page_url`, `referrer`, `page_title`,
-   * `user_agent`, and `widget_opened_at` into userVariables just before
-   * the dial. Consumer-supplied userVariables with the same keys override
-   * the auto-populated values; a `beforedial` handler with
-   * `setUserVariables` wins last. Set to `false` for strict control.
+   * Auto-populate `capabilities` and `metadata` into userVariables before
+   * dial. When true (the default), the widget injects two nested objects:
+   *
+   *   - `capabilities` — the agent-facing contract (which `display_content`
+   *     formats are supported, whether a transcript is visible, etc.).
+   *     Agents should read this to decide whether to emit visual content.
+   *   - `metadata` — session context grouped into `page`, `client`, and
+   *     `widget` sub-buckets (URL, referrer, OS, locale, timezone,
+   *     viewport, a11y prefs, widget version + theme + layout, etc.).
+   *
+   * Consumer-supplied userVariables with matching keys override the
+   * auto-populated values; a `beforedial` handler with `setUserVariables`
+   * wins last. Set to `false` for strict control over the userVariables
+   * bag.
    */
   autoIdentify?: boolean;
   /**

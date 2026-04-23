@@ -35,6 +35,7 @@ import { ChatState } from './components/chat-state';
 import { connectClient } from './lib/client';
 import type { ConnectedClient } from './lib/client';
 import { wireCallEvents } from './lib/events';
+import { detectPlatform, safeTimezone, safeMatchMedia } from './lib/env';
 
 import type {
   Theme,
@@ -189,9 +190,11 @@ export class AddressWidget extends LitElement {
   inputVolume: number | null = null;
 
   /**
-   * Auto-populate page-context fields into userVariables at dial time.
-   * Default true. Opt out with `auto-identify="false"` (attribute) or
-   * `autoIdentify: false` (option).
+   * Auto-populate `capabilities` and `metadata` into userVariables at dial
+   * time. `capabilities` is the agent-facing contract (what the widget
+   * can render); `metadata` is the session context (page, client env,
+   * widget identity). Default true. Opt out with `auto-identify="false"`
+   * (attribute) or `autoIdentify: false` (option).
    */
   @property({ attribute: 'auto-identify', reflect: true, converter: boolDefaultTrue })
   autoIdentify = true;
@@ -349,10 +352,18 @@ export class AddressWidget extends LitElement {
     }
 
     // Build the userVariables bag in precedence order (low → high):
-    //   auto-identify defaults → widget's userVariables option → beforedial.setUserVariables
-    // Later Object.assigns override earlier ones by key.
+    //   auto-identify block → widget's userVariables option → beforedial.setUserVariables
+    // When autoIdentify is on we inject two nested keys:
+    //   `capabilities` — what the widget can render (contract)
+    //   `metadata`     — page/client/widget context (session features)
+    // Consumer userVariables override or extend either via a matching key.
     const mergeVars: Record<string, unknown> = {
-      ...(this.autoIdentify ? this._buildAutoIdentify() : {}),
+      ...(this.autoIdentify
+        ? {
+            capabilities: this._buildCapabilities(),
+            metadata: this._buildMetadata()
+          }
+        : {}),
       ...this._userVariables
     };
     const detail: BeforeDialDetail = {
@@ -958,22 +969,85 @@ export class AddressWidget extends LitElement {
   }
 
   /**
-   * Build the auto-identify userVariables payload. Called once at open
-   * time so `widget_opened_at` reflects the click moment, not mount time.
-   * `referrer` is omitted when the document has none to avoid sending an
-   * empty string that looks like a misconfiguration on the agent side.
+   * Advertise to the backend what this widget can render so the agent can
+   * tailor its responses (e.g. only emit `display_content` with
+   * `format: "code"` when the widget reports support). `version` here is
+   * the bundle version the agent is talking to — useful for gating
+   * behavior on newer capability additions. Consumers can override via
+   * `userVariables.capabilities`.
    */
-  private _buildAutoIdentify(): Record<string, unknown> {
-    const vars: Record<string, unknown> = {
-      widget_opened_at: new Date().toISOString()
+  private _buildCapabilities(): Record<string, unknown> {
+    return {
+      widget: 'signalwire-address',
+      version: __WIDGET_VERSION__,
+      display_content: {
+        formats: ['text', 'markdown', 'code', 'html'],
+        /** Minimized chips stay in the transcript so the user can reopen any past push. */
+        persistent: true,
+        /** The drawer exposes a copy-to-clipboard button. */
+        copyable: true
+      },
+      /** The AI's utterances are rendered visibly in a chat transcript. */
+      transcript: true,
+      /** User's outgoing video is enabled for this call. */
+      video: this.video,
+      /** User's outgoing audio is enabled for this call. */
+      audio: this.audio,
+      /** User can see their own camera feed in a self-preview overlay. */
+      self_preview: this.video && this.showLocalVideo
     };
-    if (typeof window !== 'undefined') {
-      vars.page_url = window.location?.href;
-      vars.page_title = document?.title;
-      vars.user_agent = navigator?.userAgent;
-      if (document?.referrer) vars.referrer = document.referrer;
+  }
+
+  /**
+   * Build the session-metadata payload. Three sub-buckets:
+   *   - `page`   — where the widget lives (url, title, referrer)
+   *   - `client` — environment features (OS, locale, viewport, a11y prefs)
+   *   - `widget` — widget self-identity (version, theme, layout, open time)
+   * All values best-effort and guarded for SSR / non-browser contexts.
+   */
+  private _buildMetadata(): Record<string, unknown> {
+    const meta: Record<string, unknown> = {
+      widget: {
+        version: __WIDGET_VERSION__,
+        opened_at: new Date().toISOString(),
+        theme: this.theme,
+        layout: this.layout,
+        audio_only: !this.video
+      }
+    };
+
+    if (typeof window === 'undefined' || typeof navigator === 'undefined') {
+      return meta;
     }
-    return vars;
+
+    const page: Record<string, unknown> = {
+      url: window.location?.href,
+      title: document?.title
+    };
+    if (document?.referrer) page.referrer = document.referrer;
+    meta.page = page;
+
+    meta.client = {
+      user_agent: navigator.userAgent,
+      platform: detectPlatform(),
+      language: navigator.language,
+      languages: Array.isArray(navigator.languages) ? [...navigator.languages] : undefined,
+      timezone: safeTimezone(),
+      timezone_offset_minutes: -new Date().getTimezoneOffset(),
+      viewport: {
+        width: window.innerWidth,
+        height: window.innerHeight
+      },
+      device_pixel_ratio: window.devicePixelRatio,
+      touch: 'ontouchstart' in window || (navigator.maxTouchPoints ?? 0) > 0,
+      online: navigator.onLine,
+      cookies_enabled: navigator.cookieEnabled,
+      hardware_concurrency: navigator.hardwareConcurrency,
+      prefers_dark: safeMatchMedia('(prefers-color-scheme: dark)'),
+      prefers_reduced_motion: safeMatchMedia('(prefers-reduced-motion: reduce)')
+    };
+
+    return meta;
   }
 
   private async _awaitAnimation(): Promise<void> {
