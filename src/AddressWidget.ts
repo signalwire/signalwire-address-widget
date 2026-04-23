@@ -196,9 +196,10 @@ export class AddressWidget extends LitElement {
   /**
    * Initial microphone input volume as a percentage (0–200). 100 =
    * unchanged (unity); values below 100 reduce the outgoing mic level,
-   * values above 100 boost up to 2× at 200 (the SDK's cap). Applied
-   * locally via `call.setLocalMicrophoneGain` — no server round-trip.
-   * Leave null to use the browser's natural gain.
+   * values above 100 boost up to 2× at 200 (the SDK's cap). Passed
+   * through to `call.setLocalMicrophoneGain` on the same percentage
+   * scale — no local conversion. Leave null to use the browser's
+   * natural gain.
    */
   @property({ attribute: 'input-volume', type: Number, reflect: true })
   inputVolume: number | null = null;
@@ -699,37 +700,32 @@ export class AddressWidget extends LitElement {
     // first, so we wait for the first non-null emission of
     // call.localStream$ and apply once.
     if (this.inputVolume != null && this.audio) {
-      // inputVolume is a percentage: 100 = unchanged (unity), < 100
-      // reduces, > 100 boosts. Clamped to [0, 200] since the SDK's
-      // setLocalMicrophoneGain caps the gain multiplier at 2.
+      // Both our public `inputVolume` and the SDK's
+      // `call.setLocalMicrophoneGain(value)` are now on the same 0..200
+      // percentage scale (100 = unity). The SDK clamps to [0, 200] and
+      // divides internally to produce the Web Audio multiplier, so we
+      // pass the percentage through as-is — previously we were dividing
+      // by 100 locally, which after the SDK contract change turned
+      // inputVolume: 125 into 0.0125 = effective mute.
       const pct = Math.max(0, Math.min(200, Number(this.inputVolume)));
-      const gain = pct / 100;
-      // setLocalMicrophoneGain exists on WebRTCCall (the class) in the SDK
-      // but hasn't been added to the public `Call` interface type yet.
-      // Narrow cast until the SDK types catch up. Guarded at runtime so
-      // older bundled SDKs without the method log a warning instead of
-      // throwing TypeError.
+      // setLocalMicrophoneGain exists on WebRTCCall (the class) in the
+      // SDK but isn't part of the public `Call` interface type yet.
+      // Narrow cast until the SDK types catch up.
       const gainCall = call as unknown as {
-        setLocalMicrophoneGain?: (value: number) => void;
+        setLocalMicrophoneGain: (value: number) => void;
       };
-      if (typeof gainCall.setLocalMicrophoneGain !== 'function') {
-        console.warn(
-          '[address-widget] setLocalMicrophoneGain not available on this SDK version; inputVolume ignored'
-        );
-      } else {
-        let applied = false;
-        this._localGainSub?.unsubscribe();
-        this._localGainSub = call.localStream$.subscribe((stream) => {
-          if (stream && !applied) {
-            applied = true;
-            try {
-              gainCall.setLocalMicrophoneGain!(gain);
-            } catch (err) {
-              console.warn('[address-widget] setLocalMicrophoneGain failed:', err);
-            }
+      let applied = false;
+      this._localGainSub?.unsubscribe();
+      this._localGainSub = call.localStream$.subscribe((stream) => {
+        if (stream && !applied) {
+          applied = true;
+          try {
+            gainCall.setLocalMicrophoneGain(pct);
+          } catch (err) {
+            console.warn('[address-widget] setLocalMicrophoneGain failed:', err);
           }
-        });
-      }
+        }
+      });
     }
 
     // Device lists + selection come from the client's DeviceController.

@@ -66,14 +66,16 @@ export interface WidgetOptions {
   /**
    * Initial microphone input volume as a percentage (0–200). 100 =
    * unchanged (unity); < 100 reduces the outgoing mic level; > 100
-   * boosts up to 2× at 200 (the SDK's cap). Clamped to [0, 200].
+   * boosts up to 2× at 200 (the SDK's cap). Clamped to [0, 200] and
+   * passed directly to `call.setLocalMicrophoneGain`, which uses the
+   * same percentage scale.
    *
-   * Applied locally via `call.setLocalMicrophoneGain` (Web Audio
-   * GainNode in front of the RTCRtpSender) once getUserMedia delivers
-   * a local stream. No server round-trip and no scope requirements —
-   * works on any token. Not to be confused with
-   * `participant.setAudioInputVolume`, which is FreeSWITCH-side channel
-   * mix volume and was the wrong API for client-side gain control.
+   * Applied locally via a Web Audio GainNode in front of the
+   * RTCRtpSender once getUserMedia delivers a local stream. No server
+   * round-trip and no scope requirements — works on any token. Not to
+   * be confused with `participant.setAudioInputVolume`, which is
+   * FreeSWITCH-side channel mix volume and was the wrong API for
+   * client-side gain control.
    */
   inputVolume?: number;
   /**
