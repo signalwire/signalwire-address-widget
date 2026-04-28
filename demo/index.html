@@ -212,6 +212,8 @@
         <input id="token" type="password" autocomplete="off" placeholder="eyJhbGciOi..." />
         <label for="destination">Destination address</label>
         <input id="destination" type="text" placeholder="/private/demo-1" />
+        <label for="nodeId">Node ID <span style="text-transform:none;letter-spacing:0;font-style:italic;opacity:0.7">(optional, dev steering)</span></label>
+        <input id="nodeId" type="text" autocomplete="off" placeholder="leave blank for normal placement" />
       </section>
 
       <section class="card">
@@ -288,11 +290,13 @@
       const defaults = window.__SW_ADDRESS_DEMO_DEFAULTS__ ?? {};
       const tokenInput = document.getElementById('token');
       const destInput = document.getElementById('destination');
+      const nodeIdInput = document.getElementById('nodeId');
       const logEl = document.getElementById('log');
 
       // Prefer stored values; otherwise the local defaults; otherwise empty.
       tokenInput.value = sessionStorage.getItem('saw_demo_token') ?? defaults.token ?? '';
       destInput.value = sessionStorage.getItem('saw_demo_dest') ?? defaults.destination ?? '';
+      nodeIdInput.value = sessionStorage.getItem('saw_demo_node') ?? defaults.nodeId ?? '';
 
       tokenInput.addEventListener('input', () => {
         sessionStorage.setItem('saw_demo_token', tokenInput.value);
@@ -300,6 +304,10 @@
       });
       destInput.addEventListener('input', () => {
         sessionStorage.setItem('saw_demo_dest', destInput.value);
+        syncCredentials();
+      });
+      nodeIdInput.addEventListener('input', () => {
+        sessionStorage.setItem('saw_demo_node', nodeIdInput.value);
         syncCredentials();
       });
 
@@ -343,14 +351,12 @@
       });
 
       function syncCredentials() {
-        programmatic.token = tokenInput.value;
-        programmatic.destination = destInput.value;
-        declarative.token = tokenInput.value;
-        declarative.destination = destInput.value;
-        audioOnly.token = tokenInput.value;
-        audioOnly.destination = destInput.value;
-        stacked.token = tokenInput.value;
-        stacked.destination = destInput.value;
+        const node = nodeIdInput.value || null;
+        for (const el of [programmatic, declarative, audioOnly, stacked]) {
+          el.token = tokenInput.value;
+          el.destination = destInput.value;
+          el.nodeId = node;
+        }
       }
       syncCredentials();
 

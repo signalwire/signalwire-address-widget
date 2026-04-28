@@ -185,6 +185,8 @@
         <input id="token" type="password" autocomplete="off" placeholder="eyJhbGciOi..." />
         <label for="destination">Destination address</label>
         <input id="destination" type="text" placeholder="/private/demo-1" />
+        <label for="nodeId">Node ID <span style="text-transform:none;letter-spacing:0;font-style:italic;opacity:0.7">(optional, dev steering)</span></label>
+        <input id="nodeId" type="text" autocomplete="off" placeholder="leave blank for normal placement" />
       </section>
 
       <section class="card">
@@ -266,20 +268,21 @@
         var defaults = window.__SW_ADDRESS_DEMO_DEFAULTS__ || {};
         var tokenInput = document.getElementById('token');
         var destInput = document.getElementById('destination');
+        var nodeIdInput = document.getElementById('nodeId');
         var logEl = document.getElementById('log');
 
         tokenInput.value = sessionStorage.getItem('saw_demo_token') || defaults.token || '';
         destInput.value = sessionStorage.getItem('saw_demo_dest') || defaults.destination || '';
+        nodeIdInput.value = sessionStorage.getItem('saw_demo_node') || defaults.nodeId || '';
 
         function sync() {
-          programmatic.token = tokenInput.value;
-          programmatic.destination = destInput.value;
-          declarative.token = tokenInput.value;
-          declarative.destination = destInput.value;
-          audioOnly.token = tokenInput.value;
-          audioOnly.destination = destInput.value;
-          stacked.token = tokenInput.value;
-          stacked.destination = destInput.value;
+          var node = nodeIdInput.value || null;
+          var widgets = [programmatic, declarative, audioOnly, stacked];
+          for (var i = 0; i < widgets.length; i++) {
+            widgets[i].token = tokenInput.value;
+            widgets[i].destination = destInput.value;
+            widgets[i].nodeId = node;
+          }
         }
         tokenInput.addEventListener('input', function () {
           sessionStorage.setItem('saw_demo_token', tokenInput.value);
@@ -287,6 +290,10 @@
         });
         destInput.addEventListener('input', function () {
           sessionStorage.setItem('saw_demo_dest', destInput.value);
+          sync();
+        });
+        nodeIdInput.addEventListener('input', function () {
+          sessionStorage.setItem('saw_demo_node', nodeIdInput.value);
           sync();
         });
 

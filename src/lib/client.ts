@@ -32,6 +32,14 @@ export interface ClientDialOptions {
    * The destination receives them on the session (SWML `result.user_data`).
    */
   userVariables?: Record<string, unknown>;
+  /**
+   * Advanced / dev-only. Pin this call to a specific FreeSWITCH node by
+   * id. When set, the SDK includes `node_id` on the fresh `verto.invite`
+   * frame so the cluster routes to that box. Empty / undefined uses
+   * normal load-balanced placement. Server may ignore the hint when the
+   * target node isn't healthy or in the right pool.
+   */
+  nodeId?: string;
 }
 
 export interface ConnectedClient {
@@ -75,7 +83,8 @@ export async function connectClient(token: string): Promise<ConnectedClient> {
     audio = true,
     video = true,
     inputAudioDeviceConstraints,
-    userVariables
+    userVariables,
+    nodeId
   }: ClientDialOptions): Promise<Call> {
     if (!destination) {
       throw new Error('[address-widget] destination is required');
@@ -105,7 +114,11 @@ export async function connectClient(token: string): Promise<ConnectedClient> {
       // alongside audio:false is a no-op but keeps the log cleaner.
       ...(audio && inputAudioDeviceConstraints
         ? { inputAudioDeviceConstraints }
-        : {})
+        : {}),
+      // nodeId is forwarded only when explicitly set; empty/undefined
+      // lets the cluster pick. Recent SDK lets this flow on fresh
+      // invites, not just reattach.
+      ...(nodeId ? { nodeId } : {})
     });
 
     return call;

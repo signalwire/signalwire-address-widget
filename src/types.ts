@@ -122,6 +122,13 @@ export interface WidgetOptions {
    */
   autoReattach?: boolean;
   /**
+   * Advanced / dev-only. Pin fresh dials to a specific FreeSWITCH node by
+   * id (corresponds to `verto.invite`'s `node_id`). Useful for dev /
+   * staging traffic steering — leave undefined in production. Server may
+   * ignore the hint if the target node is unhealthy.
+   */
+  nodeId?: string;
+  /**
    * Optional image URL shown in the video area. In video mode it sits as
    * the pre-call poster. In audio-only mode (`video: false`) it becomes
    * the only visual element in place of the video frame. If omitted in

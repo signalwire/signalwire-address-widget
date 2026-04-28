@@ -238,6 +238,17 @@ export class AddressWidget extends LitElement {
   @property({ attribute: 'auto-reattach', reflect: true, converter: boolDefaultTrue })
   autoReattach = true;
 
+  /**
+   * Advanced / dev-only. Pin fresh dials from this widget to a specific
+   * FreeSWITCH node by id. When set, the SDK includes `node_id` on the
+   * `verto.invite` frame so the cluster routes to that box. Leave
+   * blank for normal load-balanced placement. Server may override the
+   * hint if the target node is unhealthy / out of pool.
+   *
+   * Not surfaced in the README; intended for dev/QA traffic steering.
+   */
+  @property({ attribute: 'node-id', reflect: true }) nodeId: string | null = null;
+
   @property({ attribute: 'user-variables', reflect: false })
   set userVariablesAttr(value: string | Record<string, unknown> | null | undefined) {
     if (value == null || value === '') {
@@ -567,7 +578,8 @@ export class AddressWidget extends LitElement {
         audio: this.audio,
         video: this.video,
         inputAudioDeviceConstraints: constraints,
-        userVariables
+        userVariables,
+        ...(this.nodeId ? { nodeId: this.nodeId } : {})
       });
       this._call = call;
 
