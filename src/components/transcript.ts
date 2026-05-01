@@ -130,6 +130,60 @@ export const transcriptStyles = css`
     }
   }
 
+  /* Coach insight: full-width row dropped inline by an ai_sidecar
+     insight event. Turquoise-edged so it pops against user/AI bubbles
+     without aligning to either side. Brand notes turquoise = positive
+     active state, and coaching guidance fits that. */
+  .insight {
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 14px;
+    background: color-mix(in srgb, var(--sw-address-positive) 10%, var(--sw-address-bg-raised));
+    border: 1px solid var(--sw-address-border);
+    border-left: 3px solid var(--sw-address-positive);
+    border-radius: 10px;
+    color: var(--sw-address-fg-default);
+    font-family: var(--sw-address-font-body);
+    text-align: start;
+    animation: insight-pulse 1.2s ease-out 1;
+  }
+
+  .insight-eyebrow {
+    font-family: var(--sw-address-font-code);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--sw-address-positive);
+  }
+
+  .insight-text {
+    font-size: 14px;
+    line-height: 1.45;
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
+  }
+
+  @keyframes insight-pulse {
+    0% {
+      box-shadow: 0 0 0 0 color-mix(in srgb, var(--sw-address-positive) 35%, transparent);
+    }
+    70% {
+      box-shadow: 0 0 0 6px transparent;
+    }
+    100% {
+      box-shadow: 0 0 0 0 transparent;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .insight {
+      animation: none;
+    }
+  }
+
   /* Content chip: minimized placeholder for a display_content push.
      Fuchsia-edged card that reads as a callable button. */
   .content-chip {
@@ -304,6 +358,22 @@ function iconLabel(format: 'text' | 'markdown' | 'code' | 'html'): string {
   }
 }
 
+function renderInsight(
+  entry: ChatEntry & { kind: 'insight' },
+  key: number
+): TemplateResult {
+  return html`<div
+    part="insight"
+    class="insight"
+    role="status"
+    aria-live="polite"
+    data-key=${key}
+  >
+    <span class="insight-eyebrow">${entry.label ?? 'Coach'}</span>
+    <span class="insight-text">${entry.text}</span>
+  </div>`;
+}
+
 function renderContentChip(
   entry: ChatEntry & { kind: 'content' },
   key: number,
@@ -347,11 +417,12 @@ export function renderTranscript(ctx: TranscriptContext): TemplateResult {
     >
       <header class="transcript-header">Transcript</header>
       <div class="transcript-body" ${ref(ctx.scrollRef)}>
-        ${ctx.entries.map((e, i) =>
-          e.kind === 'bubble'
-            ? renderBubble(e, i)
-            : renderContentChip(e, i, ctx.openContentId, ctx.onContentClick)
-        )}
+        ${ctx.entries.map((e, i) => {
+          if (e.kind === 'bubble') return renderBubble(e, i);
+          if (e.kind === 'content')
+            return renderContentChip(e, i, ctx.openContentId, ctx.onContentClick);
+          return renderInsight(e, i);
+        })}
       </div>
     </aside>
   `;

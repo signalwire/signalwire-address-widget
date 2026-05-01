@@ -249,6 +249,16 @@ export class AddressWidget extends LitElement {
    */
   @property({ attribute: 'node-id', reflect: true }) nodeId: string | null = null;
 
+  /**
+   * Enable verbose SDK diagnostics — sets `logLevel: 'debug'` and
+   * `debug: { logWsTraffic: true }` on the SignalWire client so every
+   * verto frame, state transition, and recovery event prints to the
+   * console. Off by default. Use for troubleshooting only — noisy.
+   * Logger config is global per the SDK, so flipping this on affects
+   * all client instances on the page.
+   */
+  @property({ type: Boolean, reflect: true }) debug = false;
+
   @property({ attribute: 'user-variables', reflect: false })
   set userVariablesAttr(value: string | Record<string, unknown> | null | undefined) {
     if (value == null || value === '') {
@@ -269,6 +279,9 @@ export class AddressWidget extends LitElement {
 
   /** Raw event callback. Set programmatically — not via attribute. */
   onEvent: WidgetOptions['onEvent'];
+
+  /** Raw sidecar-event callback. Set programmatically — not via attribute. */
+  onSidecarEvent: WidgetOptions['onSidecarEvent'];
 
   // ─────────────────────────────────────────────────────────────────────
   // Reactive state
@@ -310,7 +323,17 @@ export class AddressWidget extends LitElement {
 
   private _userVariables: Record<string, unknown> = {};
   private _client: ConnectedClient | null = null;
+  // The "AI dialogue" chat — receives user/AI partials and completes
+  // from `<ai>` agent events (ai.partial_result, ai.response_utterance,
+  // ai.completion, ai.speech_detect).
   private _chat = new ChatState();
+  // The "transcribe" chat — a separate conversation surface for
+  // live-transcribe / ai_sidecar bridged-call flows. Receives complete
+  // utterances from `calling.ai.transcribe.utterance`, plus sidecar
+  // `insight` events. Mutually exclusive with _chat in practice (the
+  // SWML script picks one mode), but the widget renders whichever has
+  // entries.
+  private _transcribeChat = new ChatState();
   private _unwireEvents: (() => void) | null = null;
   private _previouslyFocused: HTMLElement | null = null;
   private _previousBodyOverflow = '';
@@ -332,6 +355,8 @@ export class AddressWidget extends LitElement {
    *  depend on `call.self` being populated at the moment of the click. */
   private _self: import('@signalwire/js').CallSelfParticipant | null = null;
   private _recoveryEventSub?: import('rxjs').Subscription;
+  /** Firehose subscriptions for `debug=true` — log every SDK call event. */
+  private _firehoseSubs: import('rxjs').Subscription[] = [];
   private _bannerTimer?: ReturnType<typeof setTimeout>;
   /** Deferred auto-open when reattach completes while the tab is hidden. */
   private _pendingAutoOpen: (() => void) | null = null;
@@ -350,6 +375,9 @@ export class AddressWidget extends LitElement {
     this._chat.onUpdate = () => {
       this._chatVersion++;
       this._persistChat();
+    };
+    this._transcribeChat.onUpdate = () => {
+      this._chatVersion++;
     };
     // Assign a stable widget id before any reattach logic runs so we can
     // key sessionStorage by it. Explicit widget-id attribute wins;
@@ -522,6 +550,7 @@ export class AddressWidget extends LitElement {
       this._bannerTimer = undefined;
     }
     this._chat.reset();
+    this._transcribeChat.reset();
     if (closedCallId) {
       clearCall(this.widgetId, closedCallId);
     } else {
@@ -565,7 +594,7 @@ export class AddressWidget extends LitElement {
 
   private async _startCall(userVariables: Record<string, unknown>): Promise<void> {
     try {
-      this._client = await connectClient(this.token);
+      this._client = await connectClient(this.token, { debug: this.debug });
       const constraints = this.audio
         ? {
             echoCancellation: this.echoCancellation,
@@ -604,7 +633,20 @@ export class AddressWidget extends LitElement {
           this._chat.onAiComplete(text, barged);
           this._stopAiSpeakingRing();
         },
-        onUserEvent: (payload) => this._handleUserEvent(payload)
+        onUserEvent: (payload) => this._handleUserEvent(payload),
+        onSidecarEvent: (payload) => this._handleSidecarEvent(payload),
+        onTranscribeUtterance: (role, text) => {
+          // Map roles into the transcribe-chat bubble pipeline. Per the
+          // sidecar default (customer_role: 'remote-caller'), the widget
+          // caller is typically the remote leg, so remote-caller → user
+          // side and local-caller → ai side. ChatState's
+          // onAiComplete/onUserComplete commit a complete bubble.
+          if (role === 'local-caller') {
+            this._transcribeChat.onAiComplete(text, false);
+          } else {
+            this._transcribeChat.onUserComplete(text, false);
+          }
+        }
       });
 
       this.dispatchEvent(
@@ -828,6 +870,40 @@ export class AddressWidget extends LitElement {
         }
       });
     }
+
+    // Debug firehose: when `debug=true`, log every emission from the
+    // SDK's general call-event streams. We normally avoid these in
+    // favor of typed `call.subscribe(eventType)` calls (see CLAUDE.md),
+    // but for diagnostics they catch anything on the wire that doesn't
+    // hit one of our explicit subscriptions.
+    for (const sub of this._firehoseSubs) {
+      try {
+        sub.unsubscribe();
+      } catch {
+        /* noop */
+      }
+    }
+    this._firehoseSubs = [];
+    if (this.debug) {
+      const fireCall = call as unknown as {
+        callEvent$?: import('rxjs').Observable<unknown>;
+        signalingEvent$?: import('rxjs').Observable<unknown>;
+      };
+      if (fireCall.callEvent$) {
+        this._firehoseSubs.push(
+          fireCall.callEvent$.subscribe((evt) => {
+            console.log('[address-widget][firehose][callEvent$]', evt);
+          })
+        );
+      }
+      if (fireCall.signalingEvent$) {
+        this._firehoseSubs.push(
+          fireCall.signalingEvent$.subscribe((evt) => {
+            console.log('[address-widget][firehose][signalingEvent$]', evt);
+          })
+        );
+      }
+    }
   }
 
   private _wireDeviceObservables(): void {
@@ -981,6 +1057,74 @@ export class AddressWidget extends LitElement {
   }
 
   /**
+   * Route AI-sidecar coaching events:
+   *   - `insight` → drop a turquoise InsightEntry into the transcript
+   *   - `error`   → console.warn (noisy enough to surface in devtools;
+   *                 the host's CustomEvent listener can also pick it up)
+   *   - everything else (`turn`, `action`, `tool_call`, `tool_result`,
+   *     `start`, `stop`, `final`, `request`, `thought`,
+   *     `global_data_change`, `history_pruned`, ...) → re-emit only.
+   *     Turn events in particular carry the raw transcript fed into
+   *     the LLM — they're not user-facing content; consumers can opt
+   *     into rendering them via the CustomEvent / onSidecarEvent hooks.
+   *
+   * Every event also flows through to `onSidecarEvent` and the
+   * `signalwire-address:sidecar` CustomEvent so consumers can drive
+   * their own debug log / CRM hooks without the widget baking in
+   * specific behavior for every type.
+   */
+  private _handleSidecarEvent(payload: UserEventPayload): void {
+    if (payload.type === 'insight') {
+      const text = typeof payload.raw === 'string' ? payload.raw : '';
+      if (text) {
+        const tickId = typeof payload.tick_id === 'number' ? payload.tick_id : undefined;
+        // Insights belong to whichever surface ends up active. Push
+        // into both so the visible chat picks them up regardless of
+        // which mode the call lands in (or transitions to).
+        const insight = { text, tickId, ts: Date.now() };
+        this._chat.pushInsight(insight);
+        this._transcribeChat.pushInsight(insight);
+      }
+    } else if (payload.type === 'tool_result') {
+      // Tool results — when the LLM's tool returned something. Surface
+      // the human-readable response inline so the agent can see what
+      // ran. Skip the built-in `sidecar_skip` (it's noise, not advice).
+      const name = typeof payload.name === 'string' ? payload.name : '';
+      if (name && name !== 'sidecar_skip') {
+        const rawResponse = typeof payload.response === 'string' ? payload.response : '';
+        // The response is usually a JSON-encoded { response: "..." }
+        // payload from the SWAIG function. Try to unwrap it; fall back
+        // to the raw string if parse fails.
+        let responseText = rawResponse;
+        try {
+          const parsed = JSON.parse(rawResponse) as { response?: unknown };
+          if (parsed && typeof parsed === 'object' && typeof parsed.response === 'string') {
+            responseText = parsed.response;
+          }
+        } catch {
+          /* keep raw */
+        }
+        const text = responseText ? `${name}: ${responseText}` : name;
+        const tickId = typeof payload.tick_id === 'number' ? payload.tick_id : undefined;
+        const note = { text, label: 'Tool', tickId, ts: Date.now() };
+        this._chat.pushInsight(note);
+        this._transcribeChat.pushInsight(note);
+      }
+    } else if (payload.type === 'error') {
+      console.warn('[address-widget] sidecar error:', payload);
+    }
+
+    this.onSidecarEvent?.(payload);
+    this.dispatchEvent(
+      new CustomEvent('signalwire-address:sidecar', {
+        detail: payload,
+        bubbles: true,
+        composed: true
+      })
+    );
+  }
+
+  /**
    * Default chip title for payloads that don't supply one — keeps the chip
    * from reading as an empty row when the agent skips `title`.
    */
@@ -1030,7 +1174,7 @@ export class AddressWidget extends LitElement {
     this._reattaching = true;
     let client: ConnectedClient;
     try {
-      client = await connectClient(this.token);
+      client = await connectClient(this.token, { debug: this.debug });
     } catch {
       clearCall(this.widgetId, last.callId);
       this._reattaching = false;
@@ -1110,7 +1254,20 @@ export class AddressWidget extends LitElement {
             this._chat.onAiComplete(text, barged);
             this._stopAiSpeakingRing();
           },
-          onUserEvent: (payload) => this._handleUserEvent(payload)
+          onUserEvent: (payload) => this._handleUserEvent(payload),
+        onSidecarEvent: (payload) => this._handleSidecarEvent(payload),
+        onTranscribeUtterance: (role, text) => {
+          // Map roles into the transcribe-chat bubble pipeline. Per the
+          // sidecar default (customer_role: 'remote-caller'), the widget
+          // caller is typically the remote leg, so remote-caller → user
+          // side and local-caller → ai side. ChatState's
+          // onAiComplete/onUserComplete commit a complete bubble.
+          if (role === 'local-caller') {
+            this._transcribeChat.onAiComplete(text, false);
+          } else {
+            this._transcribeChat.onUserComplete(text, false);
+          }
+        }
         });
       });
     };
@@ -1235,6 +1392,14 @@ export class AddressWidget extends LitElement {
       }
       this._recoveryEventSub = undefined;
     }
+    for (const sub of this._firehoseSubs) {
+      try {
+        sub.unsubscribe();
+      } catch {
+        /* noop */
+      }
+    }
+    this._firehoseSubs = [];
     const localVideoEl = this._localVideoRef.value;
     if (localVideoEl) localVideoEl.srcObject = null;
     this._selfObserverSub?.unsubscribe();
@@ -1429,7 +1594,21 @@ export class AddressWidget extends LitElement {
       </div>`;
     }
 
-    const entries = this._chat.getHistory();
+    // Two parallel chat surfaces, one panel. The `<ai>` agent flow
+    // drives _chat; live-transcribe / ai_sidecar drives _transcribeChat.
+    // Mode switches mid-call are real (a transcribe call can get
+    // transferred to an AI agent), so we resolve which to render on
+    // every paint.
+    //
+    // Priority: AI mode is "active" iff _chat has at least one
+    // dialogue *bubble* (user/ai utterance). Insights / tool notes
+    // / content chips are pushed into both chats so they survive a
+    // mode swap, so their presence alone shouldn't flip us into AI
+    // mode and wipe the transcribe-side dialogue.
+    const aiEntries = this._chat.getHistory();
+    const transcribeEntries = this._transcribeChat.getHistory();
+    const aiHasBubble = aiEntries.some((e) => e.kind === 'bubble');
+    const entries = aiHasBubble ? aiEntries : transcribeEntries;
     const hasChat = entries.length > 0;
     const openContent =
       this._openContentId !== null

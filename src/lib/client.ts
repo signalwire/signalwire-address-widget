@@ -51,6 +51,16 @@ export interface ConnectedClient {
   disconnect(): void;
 }
 
+export interface ConnectClientOptions {
+  /**
+   * Verbose SDK diagnostics. Sets `logLevel: 'debug'` plus
+   * `debug: { logWsTraffic: true }` on the SignalWire client so every
+   * verto frame and state transition prints to the console. Noisy —
+   * off by default; flip on per-call when troubleshooting.
+   */
+  debug?: boolean;
+}
+
 /**
  * Connect a SignalWire client with a SAT.
  *
@@ -61,12 +71,28 @@ export interface ConnectedClient {
  * @throws If the token is empty. Network/auth errors surface on the first
  *         `dial` call, not at construction.
  */
-export async function connectClient(token: string): Promise<ConnectedClient> {
+export async function connectClient(
+  token: string,
+  options: ConnectClientOptions = {}
+): Promise<ConnectedClient> {
   if (!token) {
     throw new Error('[address-widget] token is required');
   }
 
   const provider = new StaticCredentialProvider({ token });
+  // Custom logger when debug is on — routes every level to console.log
+  // so debug-level output is visible without the user enabling Chrome's
+  // Verbose filter (loglevel's default debug() goes to console.debug,
+  // which DevTools hides by default).
+  const debugLogger = options.debug
+    ? {
+        trace: (...a: unknown[]) => console.log('[sw][trace]', ...a),
+        debug: (...a: unknown[]) => console.log('[sw][debug]', ...a),
+        info: (...a: unknown[]) => console.log('[sw][info]', ...a),
+        warn: (...a: unknown[]) => console.warn('[sw][warn]', ...a),
+        error: (...a: unknown[]) => console.error('[sw][error]', ...a)
+      }
+    : undefined;
   // `reconnectAttachedCalls` + `persistSession` together let the SDK
   // reattach to an active call after a page reload: it stores active
   // call IDs in sessionStorage and, when the same session comes back,
@@ -75,7 +101,16 @@ export async function connectClient(token: string): Promise<ConnectedClient> {
   // that maps that Call → "reopen the overlay for widget <widgetId>".
   const client = new SignalWire(provider, {
     reconnectAttachedCalls: true,
-    persistSession: true
+    persistSession: true,
+    ...(options.debug
+      ? {
+          // Custom logger ignores logLevel per SDK docs, so we just
+          // route everything; debug.logWsTraffic still gates the
+          // verto-frame stream.
+          logger: debugLogger,
+          debug: { logWsTraffic: true }
+        }
+      : {})
   });
 
   async function dial({

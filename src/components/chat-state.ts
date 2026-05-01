@@ -46,7 +46,27 @@ export interface ContentChipEntry {
   language?: string;
 }
 
-export type ChatEntry = BubbleEntry | ContentChipEntry;
+/**
+ * A coach-insight row — one-line agent-facing advice from an
+ * `ai_sidecar` `insight` event. Rendered inline in the transcript with
+ * a distinct visual treatment so it can't be missed mid-call. `tickId`
+ * is the sidecar tick that produced it (useful for ordering /
+ * deduplication if the server replays).
+ */
+export interface InsightEntry {
+  kind: 'insight';
+  text: string;
+  /**
+   * Eyebrow label rendered above the row. Defaults to "Coach" when
+   * undefined; supply something like "Tool" for tool-result notes so
+   * the user can tell coach hints from tool output at a glance.
+   */
+  label?: string;
+  tickId?: number;
+  ts: number;
+}
+
+export type ChatEntry = BubbleEntry | ContentChipEntry | InsightEntry;
 
 export class ChatState {
   private _entries: ChatEntry[] = [];
@@ -152,13 +172,26 @@ export class ChatState {
   }
 
   /**
+   * Append a coach-insight entry. Sidecar events stream in independently
+   * of user/AI turns, so this just lands in the transcript at the moment
+   * the event arrives. Auto-scroll keeps it visible.
+   */
+  public pushInsight(entry: Omit<InsightEntry, 'kind'>): void {
+    this._entries.push({ kind: 'insight', ...entry });
+    this.onUpdate();
+  }
+
+  /**
    * Bulk-replace the completed entries with a snapshot. Used on reattach
    * to rehydrate from sessionStorage before any live subscriptions fire.
    * Partials are cleared — they're always in-flight, never persisted.
    */
   public loadSnapshot(entries: ChatEntry[]): void {
     this._entries = entries.filter(
-      (e) => e.kind === 'content' || (e.kind === 'bubble' && e.state === 'complete')
+      (e) =>
+        e.kind === 'content' ||
+        e.kind === 'insight' ||
+        (e.kind === 'bubble' && e.state === 'complete')
     );
     this._aiPartial = null;
     this._userPartial = null;

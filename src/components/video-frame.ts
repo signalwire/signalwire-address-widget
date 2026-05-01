@@ -27,7 +27,12 @@ import type { Call } from '@signalwire/js';
 // rely on MCU layoutLayers$ to position self, which 1:1 calls without a
 // layout don't populate. Instead we render our own <video> overlay bound
 // to call.localStream$.
-import '@signalwire/web-components/call-media';
+// Side-effect import: registers <sw-call-media> (and the rest of the
+// web-components custom elements) via the package's index entry. The
+// SDK's exports map currently doesn't expose `./sw-call-media` as a
+// deep import path that resolves to the dist filename, so we go through
+// the bare entry.
+import '@signalwire/web-components';
 
 /**
  * Default SignalWire poster shown before a call is live when no custom

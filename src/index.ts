@@ -82,11 +82,15 @@ export function mount(target: Target, options: WidgetOptions): AddressWidget {
   if (options.inputVolume !== undefined) widget.inputVolume = options.inputVolume;
   if (options.autoIdentify !== undefined) widget.autoIdentify = options.autoIdentify;
   if (options.nodeId !== undefined) widget.nodeId = options.nodeId;
+  if (options.debug !== undefined) widget.debug = options.debug;
   if (options.userVariables !== undefined) {
     widget.userVariablesAttr = options.userVariables;
   }
   if (options.onEvent !== undefined) {
     widget.onEvent = options.onEvent;
+  }
+  if (options.onSidecarEvent !== undefined) {
+    widget.onSidecarEvent = options.onSidecarEvent;
   }
 
   // Move existing children of target into the widget as slot content.

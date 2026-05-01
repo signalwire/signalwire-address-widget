@@ -141,6 +141,23 @@ export interface WidgetOptions {
    * agent-driven UI without us having to bake in support.
    */
   onEvent?: (event: UserEventPayload) => void;
+  /**
+   * Optional pass-through for every `calling.ai.sidecar` event the call
+   * subscribes to. The widget already handles `type: 'insight'` (drops a
+   * row into the transcript) and `type: 'error'` (console.warn); this
+   * hook fires for every event regardless so consumers can render their
+   * own debug log / drive CRM workflows from `tool_call` / `action` /
+   * `final` etc. Same payloads also fire as `signalwire-address:sidecar`
+   * CustomEvents.
+   */
+  onSidecarEvent?: (event: UserEventPayload) => void;
+  /**
+   * Verbose SDK diagnostics. Sets `logLevel: 'debug'` and
+   * `debug: { logWsTraffic: true }` on the SignalWire client so every
+   * verto frame, state transition, and recovery event prints to the
+   * console. Off by default — noisy. Use for troubleshooting only.
+   */
+  debug?: boolean;
 }
 
 /** Any user_event payload. The agent can define any `type` field it wants. */

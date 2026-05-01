@@ -37,6 +37,22 @@ export interface EventHandlers {
   onAiComplete?(text: string, barged: boolean): void;
   /** Anything on `user_event` — dispatched raw with `params.type` as a discriminator. */
   onUserEvent?(payload: UserEventPayload): void;
+  /**
+   * Anything on `calling.ai.sidecar` — the AI-sidecar coaching topic.
+   * Each event carries a `type` field (`insight`, `skip`, `tool_call`,
+   * `error`, `final`, ...). Handler receives the whole `params` body.
+   */
+  onSidecarEvent?(payload: UserEventPayload): void;
+  /**
+   * `calling.ai.transcribe.utterance` — per-utterance live transcribe
+   * events. Distinct from the `<ai>` agent stream: these come from
+   * `live_transcribe` / `ai_sidecar` mode and represent the actual
+   * audio being said on each leg of a bridged call.
+   */
+  onTranscribeUtterance?(
+    role: 'local-caller' | 'remote-caller' | string,
+    text: string
+  ): void;
 }
 
 /** Event types we always subscribe to. */
@@ -45,7 +61,18 @@ const EVENT_TYPES = [
   'ai.speech_detect',
   'ai.response_utterance',
   'ai.completion',
-  'user_event'
+  'user_event',
+  // `ai_sidecar` coaching events. The wire `event_type` is the bare
+  // `ai.sidecar` (the `calling.` prefix is the relay-topic name, not
+  // what the SDK matches on — `Call.subscribe()` does strict equality
+  // against `event_type`). Sub-shape lives in `params.type`
+  // (`insight`, `skip`, `tool_call`, ...) and routes through
+  // `onSidecarEvent`.
+  'ai.sidecar',
+  // `live_transcribe` / `ai_sidecar` (with `live_events: true`)
+  // per-utterance transcripts. Each event carries
+  // `params.utterance.{role, content}`.
+  'ai.transcribe.utterance'
 ] as const;
 
 type EventType = (typeof EVENT_TYPES)[number];
@@ -121,6 +148,36 @@ function routeEvent(
         }
       }
       handlers.onUserEvent?.(payload);
+      break;
+    }
+    case 'ai.sidecar': {
+      // Sidecar events are wrapped under `sidecar_event` when the relay
+      // delivers the webhook envelope; some envelopes deliver `params`
+      // directly. Try both shapes so the consumer always sees an object
+      // with a `type` field at the top level.
+      let payload = params as UserEventPayload & { sidecar_event?: unknown };
+      if (
+        payload.sidecar_event &&
+        typeof payload.sidecar_event === 'object' &&
+        typeof (payload.sidecar_event as UserEventPayload).type === 'string'
+      ) {
+        payload = payload.sidecar_event as UserEventPayload;
+      }
+      handlers.onSidecarEvent?.(payload as UserEventPayload);
+      break;
+    }
+    case 'ai.transcribe.utterance': {
+      // params.utterance.{role, content} is the canonical shape per
+      // the sidecar/live_transcribe events doc. We hand the raw role
+      // through so the consumer can route it into a separate transcript
+      // (this is a different conversation from `<ai>` events — bridged
+      // human-to-human or human-to-bridge calls, not AI-agent dialogue).
+      const utt = (params as { utterance?: { role?: unknown; content?: unknown } }).utterance;
+      if (!utt || typeof utt.content !== 'string') break;
+      const text = stripConfidence(utt.content);
+      if (!text) break;
+      const role = typeof utt.role === 'string' ? utt.role : '';
+      handlers.onTranscribeUtterance?.(role, text);
       break;
     }
   }

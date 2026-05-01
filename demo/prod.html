@@ -178,6 +178,14 @@
         <input id="destination" type="text" placeholder="/private/demo-1" />
         <label for="nodeId">Node ID <span style="text-transform:none;letter-spacing:0;font-style:italic;opacity:0.7">(optional, dev steering)</span></label>
         <input id="nodeId" type="text" autocomplete="off" placeholder="leave blank for normal placement" />
+        <label style="display:flex;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-family:'Lexend',sans-serif;font-size:13px;color:var(--fg);margin-top:14px;cursor:pointer">
+          <input id="video" type="checkbox" style="width:auto;margin:0;cursor:pointer" />
+          Video <span style="color:var(--fg-muted);font-style:italic">(uncheck to dial audio-only — does not affect the dedicated Audio-only card)</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-family:'Lexend',sans-serif;font-size:13px;color:var(--fg);margin-top:8px;cursor:pointer">
+          <input id="debug" type="checkbox" style="width:auto;margin:0;cursor:pointer" />
+          Debug logging <span style="color:var(--fg-muted);font-style:italic">(verbose SDK + verto frames in console)</span>
+        </label>
       </section>
 
       <section class="card">
@@ -249,26 +257,59 @@
     <!-- Local defaults loaded on start. File is gitignored and copied into
          dist/ only when present. Missing is fine — demo just starts blank. -->
     <script src="./defaults.local.js"></script>
-    <script src="./address-widget.umd.js"></script>
+    <script>
+      // Cache-buster so dev iterations always load the freshly-built UMD.
+      // Synchronous document.write keeps execution order the same as a
+      // static <script> tag — the inline IIFE below still runs after the
+      // bundle has loaded and registered SignalWireAddressWidget.
+      document.write(
+        '<script src="./address-widget.umd.js?cb=' +
+          Date.now() +
+          '"><\/script>'
+      );
+    </script>
     <script>
       (function () {
         var defaults = window.__SW_ADDRESS_DEMO_DEFAULTS__ || {};
         var tokenInput = document.getElementById('token');
         var destInput = document.getElementById('destination');
         var nodeIdInput = document.getElementById('nodeId');
+        var videoInput = document.getElementById('video');
+        var debugInput = document.getElementById('debug');
         var logEl = document.getElementById('log');
 
         tokenInput.value = sessionStorage.getItem('saw_demo_token') || defaults.token || '';
         destInput.value = sessionStorage.getItem('saw_demo_dest') || defaults.destination || '';
         nodeIdInput.value = sessionStorage.getItem('saw_demo_node') || defaults.nodeId || '';
+        // Video defaults to true — uncheck to make all three video-capable
+        // widgets (programmatic, declarative, stacked) dial audio-only. The
+        // dedicated Audio-only card stays audio-only regardless. Toggle
+        // applies to the next dial; mid-call changes are ignored.
+        var storedVideo = sessionStorage.getItem('saw_demo_video');
+        videoInput.checked = storedVideo === null
+          ? defaults.video !== false
+          : storedVideo === '1';
+        // Pull debug from sessionStorage (or default to false). Note: the SDK's
+        // logger is set on the next dial — toggling mid-call does not retroactively
+        // turn on / off WS-frame logging. Reload after toggling for a clean slate.
+        debugInput.checked = sessionStorage.getItem('saw_demo_debug') === '1' || !!defaults.debug;
 
         function sync() {
           var node = nodeIdInput.value || null;
+          var videoOn = !!videoInput.checked;
+          var debugOn = !!debugInput.checked;
+          // audioOnly is intentionally fixed at video:false — it's the
+          // dedicated demo of audio-only mode. Other three follow the toggle.
+          var videoCapable = [programmatic, declarative, stacked];
+          for (var i = 0; i < videoCapable.length; i++) {
+            videoCapable[i].video = videoOn;
+          }
           var widgets = [programmatic, declarative, audioOnly, stacked];
-          for (var i = 0; i < widgets.length; i++) {
-            widgets[i].token = tokenInput.value;
-            widgets[i].destination = destInput.value;
-            widgets[i].nodeId = node;
+          for (var j = 0; j < widgets.length; j++) {
+            widgets[j].token = tokenInput.value;
+            widgets[j].destination = destInput.value;
+            widgets[j].nodeId = node;
+            widgets[j].debug = debugOn;
           }
         }
         tokenInput.addEventListener('input', function () {
@@ -281,6 +322,14 @@
         });
         nodeIdInput.addEventListener('input', function () {
           sessionStorage.setItem('saw_demo_node', nodeIdInput.value);
+          sync();
+        });
+        videoInput.addEventListener('change', function () {
+          sessionStorage.setItem('saw_demo_video', videoInput.checked ? '1' : '0');
+          sync();
+        });
+        debugInput.addEventListener('change', function () {
+          sessionStorage.setItem('saw_demo_debug', debugInput.checked ? '1' : '0');
           sync();
         });
 
