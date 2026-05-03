@@ -1030,13 +1030,19 @@ export class AddressWidget extends LitElement {
         this._contentHistory.set(id, picked);
         this._contentOrder.push(id);
         this._openContentId = id;
-        this._chat.pushContent({
+        // Push the chip into both chat surfaces so it's visible whether
+        // the call is in AI-agent mode or transcribe/sidecar mode (and
+        // survives a mode swap mid-call). Same pattern as sidecar
+        // insights.
+        const chip = {
           id,
           title: picked.title ?? this._defaultChipTitle(picked),
           preview: this._buildPreview(picked),
           format: picked.format,
           language: picked.language
-        });
+        };
+        this._chat.pushContent(chip);
+        this._transcribeChat.pushContent(chip);
         this._persistContent();
       } else {
         // eslint-disable-next-line no-console
