@@ -341,6 +341,7 @@ export class AddressWidget extends LitElement {
   private _aiChunkTimer?: ReturnType<typeof setTimeout>;
   private _transcriptRef = createTranscriptRef();
   private _audioRef = createRef<HTMLAudioElement>();
+  private _remoteVideoRef = createRef<HTMLVideoElement>();
   private _localVideoRef = createRef<HTMLVideoElement>();
   private _remoteStreamSub?: import('rxjs').Subscription;
   private _localStreamSub?: import('rxjs').Subscription;
@@ -665,23 +666,35 @@ export class AddressWidget extends LitElement {
   }
 
   private _wireCallStateObservables(call: Call): void {
-    // Attach the remote stream's audio to our hidden <audio> sink so the
-    // user hears it — the sibling <video> rendered by sw-call-media is
-    // forced-muted by its own template for autoplay compliance.
+    // Attach the remote stream to BOTH the hidden <audio> sink (for
+    // playback — the visible <video> is muted for autoplay compliance)
+    // AND the visible <video> element (for picture). Same stream object
+    // on both elements is fine — the audio element ignores video
+    // tracks, the video element ignores audio tracks (because muted).
     this._remoteStreamSub?.unsubscribe();
     this._remoteStreamSub = call.remoteStream$.subscribe((stream) => {
-      const el = this._audioRef.value;
-      if (!el) return;
-      if (stream) {
-        if (el.srcObject !== stream) {
-          el.srcObject = stream;
+      const audioEl = this._audioRef.value;
+      const videoEl = this._remoteVideoRef.value;
+      if (audioEl) {
+        if (stream) {
+          if (audioEl.srcObject !== stream) audioEl.srcObject = stream;
+          // Best-effort play — the launcher click supplied the gesture.
+          void audioEl.play?.().catch(() => {
+            /* autoplay may still fail if permissions are weird; ignore */
+          });
+        } else {
+          audioEl.srcObject = null;
         }
-        // Best-effort play — the launcher click supplied the gesture.
-        void el.play?.().catch(() => {
-          /* autoplay may still fail if permissions are weird; ignore */
-        });
-      } else {
-        el.srcObject = null;
+      }
+      if (videoEl) {
+        if (stream) {
+          if (videoEl.srcObject !== stream) videoEl.srcObject = stream;
+          void videoEl.play?.().catch(() => {
+            /* video is muted so autoplay should always succeed; ignore */
+          });
+        } else {
+          videoEl.srcObject = null;
+        }
       }
     });
 
@@ -1408,6 +1421,8 @@ export class AddressWidget extends LitElement {
     this._firehoseSubs = [];
     const localVideoEl = this._localVideoRef.value;
     if (localVideoEl) localVideoEl.srcObject = null;
+    const remoteVideoEl = this._remoteVideoRef.value;
+    if (remoteVideoEl) remoteVideoEl.srcObject = null;
     this._selfObserverSub?.unsubscribe();
     this._selfObserverSub = null;
     for (const sub of this._selfSubs) {
@@ -1637,6 +1652,7 @@ export class AddressWidget extends LitElement {
         call: this._call,
         ring: this._ring,
         audioRef: this._audioRef,
+        remoteVideoRef: this._remoteVideoRef,
         localVideoRef: this._localVideoRef,
         videoEnabled: this.video,
         poster: this.poster,

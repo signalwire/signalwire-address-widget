@@ -3,8 +3,14 @@
  *
  * Central stage of the overlay. Before the call connects, shows a branded
  * poster with a fuchsia breathing glow. Once a Call object is available,
- * embeds `<sw-call-media>` from @signalwire/web-components which handles
- * the remote stream, layout layers, and aspect-ratio fitting.
+ * renders a plain `<video>` element bound by AddressWidget to
+ * `call.remoteStream$`. We previously used `<sw-call-media>` from
+ * @signalwire/web-components, but that component's
+ * `_recalculateDimensions` math doesn't account for our overlay's
+ * containing block and collapses to zero size once a video track
+ * arrives. Owning the video element directly is simpler, avoids the
+ * extra dependency, and mirrors the pattern we already use for the
+ * local self-preview.
  *
  * Layered state indicators (rings) sit on top of the frame and react to
  * flags driven by the event multiplexer (task #12):
@@ -22,17 +28,9 @@ import type { Ref } from 'lit/directives/ref.js';
 import type { TemplateResult } from 'lit';
 import type { Call } from '@signalwire/js';
 
-// Register the sub-component custom elements by import side-effect.
-// Note: we intentionally don't use <sw-self-media>/<sw-participants> — they
-// rely on MCU layoutLayers$ to position self, which 1:1 calls without a
-// layout don't populate. Instead we render our own <video> overlay bound
-// to call.localStream$.
-// Side-effect import: registers <sw-call-media> (and the rest of the
-// web-components custom elements) via the package's index entry. The
-// SDK's exports map currently doesn't expose `./sw-call-media` as a
-// deep import path that resolves to the dist filename, so we go through
-// the bare entry.
-import '@signalwire/web-components';
+// No web-components side-effect imports needed — we own all <video>
+// elements in this frame and bind them directly to the call's stream
+// observables (`remoteStream$`, `localStream$`) from AddressWidget.
 
 /**
  * Default SignalWire poster shown before a call is live when no custom
@@ -49,11 +47,14 @@ export interface VideoFrameContext {
   ring: VideoFrameRing;
   /**
    * Ref to the hidden <audio autoplay> element. AddressWidget attaches
-   * the remote stream here so audio plays — `<sw-call-media>` hard-codes
-   * its video element as `muted` for Chrome's autoplay policy, which
-   * silences audio going through that element alone.
+   * the remote stream here so audio plays — the visible <video> below
+   * is `muted` for autoplay-policy compliance, which silences audio
+   * going through that element alone.
    */
   audioRef: Ref<HTMLAudioElement>;
+  /** Ref for the remote-stream `<video>` element. AddressWidget binds
+   *  `call.remoteStream$` to its `srcObject`. */
+  remoteVideoRef: Ref<HTMLVideoElement>;
   /**
    * When false, the video frame collapses entirely. If `poster` is also
    * supplied it shows in a simple centered image; otherwise nothing renders
@@ -224,15 +225,15 @@ export const videoFrameStyles = css`
     }
   }
 
-  /* sw-call-media theme overrides: match the container's radius and let
-     @signalwire/web-components render inside the rounded frame without
-     drawing its own background. Full brand alignment lives in
-     src/brand/overrides.ts (task #17). */
-  sw-call-media {
+  /* Remote video: fill the rounded frame with letterboxed contain so
+     16:9 / 4:3 / portrait sources all render fully without crop. The
+     frame itself has aspect-ratio 16/9; object-fit handles the rest. */
+  .remote-video {
+    display: block;
     width: 100%;
     height: 100%;
-    --sw-color-background: #000000;
-    --sw-border-radius: 0px;
+    background: #000;
+    object-fit: contain;
   }
 
   @media (max-width: 767px) {
@@ -390,7 +391,15 @@ export function renderVideoFrame(ctx: VideoFrameContext): TemplateResult {
     <div part="video-frame" class="video-frame">
       <div class="video-frame-inner" data-ring=${ctx.ring}>
         ${ctx.call
-          ? html`<sw-call-media .call=${ctx.call}></sw-call-media>`
+          ? html`<video
+              class="remote-video"
+              part="video"
+              ${ref(ctx.remoteVideoRef)}
+              autoplay
+              playsinline
+              muted
+              disablepictureinpicture
+            ></video>`
           : html`<div class="poster">
               <img src=${posterUrl} alt="" />
               <div class="poster-label">Connecting call</div>
