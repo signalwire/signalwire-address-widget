@@ -152,6 +152,35 @@ export interface WidgetOptions {
    */
   onSidecarEvent?: (event: UserEventPayload) => void;
   /**
+   * Require user consent to call recording before each fresh dial.
+   * When on, a single-screen modal explains the recording in plain
+   * language and lets the user opt out of video. Choice is persisted
+   * in localStorage (origin-wide) so they're not re-prompted on
+   * subsequent dials. A small "Recording" badge stays visible during
+   * the call. Default false.
+   */
+  consentRequired?: boolean;
+  /**
+   * Schema / policy version tag for the consent record. Bump when
+   * copy or scope materially changes so old consent invalidates and
+   * users see the new prompt. Defaults to 1.
+   */
+  consentVersion?: number;
+  /**
+   * Fired when the user accepts the consent prompt. Receives the
+   * persisted record. Same payload also fires as
+   * `signalwire-address:consent-given` CustomEvent.
+   */
+  onConsentGiven?: (record: {
+    audio: boolean;
+    train: boolean;
+    camera: boolean;
+    audioDeviceId: string | null;
+    videoDeviceId: string | null;
+    ts: string;
+    version: number;
+  }) => void;
+  /**
    * Verbose SDK diagnostics. Sets `logLevel: 'debug'` and
    * `debug: { logWsTraffic: true }` on the SignalWire client so every
    * verto frame, state transition, and recovery event prints to the

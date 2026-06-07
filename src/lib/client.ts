@@ -19,8 +19,15 @@ export interface ClientDialOptions {
   destination: string;
   /** Enable outgoing audio. Defaults to true. */
   audio?: boolean;
-  /** Enable outgoing video. Defaults to true. */
+  /** Enable outgoing video (i.e. getUserMedia + send the camera track).
+   *  Defaults to true. Independent of `receiveVideo` so the call can
+   *  receive remote video without sending the user's camera. */
   video?: boolean;
+  /** Whether the call should be set up to receive remote video.
+   *  Defaults to `video` for backwards-compat — pass true explicitly
+   *  to receive without sending (e.g. "I want to see the agent but
+   *  not share my camera"). */
+  receiveVideo?: boolean;
   /**
    * Audio-processing constraints fed through to `getUserMedia` via the
    * SDK's `inputAudioDeviceConstraints` option. Typical fields:
@@ -117,6 +124,7 @@ export async function connectClient(
     destination,
     audio = true,
     video = true,
+    receiveVideo,
     inputAudioDeviceConstraints,
     userVariables,
     nodeId
@@ -144,7 +152,7 @@ export async function connectClient(
       audio,
       video,
       receiveAudio: true,
-      receiveVideo: video,
+      receiveVideo: receiveVideo ?? video,
       // Only pass constraints when audio is actually enabled; passing them
       // alongside audio:false is a no-op but keeps the log cleaner.
       ...(audio && inputAudioDeviceConstraints

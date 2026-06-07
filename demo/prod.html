@@ -186,6 +186,11 @@
           <input id="debug" type="checkbox" style="width:auto;margin:0;cursor:pointer" />
           Debug logging <span style="color:var(--fg-muted);font-style:italic">(verbose SDK + verto frames in console)</span>
         </label>
+        <label style="display:flex;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-family:'Lexend',sans-serif;font-size:13px;color:var(--fg);margin-top:8px;cursor:pointer">
+          <input id="consentRequired" type="checkbox" style="width:auto;margin:0;cursor:pointer" />
+          Consent required <span style="color:var(--fg-muted);font-style:italic">(shows the recording-disclosure modal before each fresh dial)</span>
+        </label>
+        <button id="consentReset" type="button" style="margin-top:6px;font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.14em;text-transform:uppercase;background:transparent;color:var(--fg-muted);border:1px solid var(--border);border-radius:100px;padding:6px 14px;cursor:pointer">Reset saved consent</button>
       </section>
 
       <section class="card">
@@ -276,6 +281,8 @@
         var nodeIdInput = document.getElementById('nodeId');
         var videoInput = document.getElementById('video');
         var debugInput = document.getElementById('debug');
+        var consentRequiredInput = document.getElementById('consentRequired');
+        var consentResetBtn = document.getElementById('consentReset');
         var logEl = document.getElementById('log');
 
         tokenInput.value = sessionStorage.getItem('saw_demo_token') || defaults.token || '';
@@ -293,11 +300,18 @@
         // logger is set on the next dial — toggling mid-call does not retroactively
         // turn on / off WS-frame logging. Reload after toggling for a clean slate.
         debugInput.checked = sessionStorage.getItem('saw_demo_debug') === '1' || !!defaults.debug;
+        // Mirror the widget's default: consent is ON unless the user
+        // explicitly turned it off in this tab (or in defaults.local.js).
+        var storedConsentRequired = sessionStorage.getItem('saw_demo_consent_required');
+        consentRequiredInput.checked = storedConsentRequired === null
+          ? defaults.consentRequired !== false
+          : storedConsentRequired === '1';
 
         function sync() {
           var node = nodeIdInput.value || null;
           var videoOn = !!videoInput.checked;
           var debugOn = !!debugInput.checked;
+          var consentOn = !!consentRequiredInput.checked;
           // audioOnly is intentionally fixed at video:false — it's the
           // dedicated demo of audio-only mode. Other three follow the toggle.
           var videoCapable = [programmatic, declarative, stacked];
@@ -310,6 +324,7 @@
             widgets[j].destination = destInput.value;
             widgets[j].nodeId = node;
             widgets[j].debug = debugOn;
+            widgets[j].consentRequired = consentOn;
           }
         }
         tokenInput.addEventListener('input', function () {
@@ -331,6 +346,19 @@
         debugInput.addEventListener('change', function () {
           sessionStorage.setItem('saw_demo_debug', debugInput.checked ? '1' : '0');
           sync();
+        });
+        consentRequiredInput.addEventListener('change', function () {
+          sessionStorage.setItem(
+            'saw_demo_consent_required',
+            consentRequiredInput.checked ? '1' : '0'
+          );
+          sync();
+        });
+        consentResetBtn.addEventListener('click', function () {
+          try { localStorage.removeItem('swaw:consent'); } catch (e) {}
+          // Hard reload so each widget instance re-reads the (now absent)
+          // consent on connectedCallback and the edit-link / badge update.
+          location.reload();
         });
 
         // Shared audio-processing prefs: AGC off, +25% mic gain (100 = unity, 200 = 2×).

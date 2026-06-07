@@ -33,11 +33,20 @@ import { contentDrawerStyles, renderContentDrawer } from './components/content-d
 import { ChatState } from './components/chat-state';
 import { bannerStyles, renderBanner } from './components/banner';
 import type { BannerMessage } from './components/banner';
+import {
+  consentStyles,
+  renderConsentModal,
+  renderConsentBadge,
+  createConsentModalRef
+} from './components/consent';
+import type { ConsentDraft } from './components/consent';
 
 import { connectClient } from './lib/client';
 import type { ConnectedClient } from './lib/client';
 import { wireCallEvents } from './lib/events';
 import { detectPlatform, safeTimezone, safeMatchMedia } from './lib/env';
+import { readConsent, writeConsent } from './lib/consent';
+import type { ConsentRecord } from './lib/consent';
 import {
   readValidLast,
   writeLast,
@@ -93,6 +102,7 @@ export class AddressWidget extends LitElement {
     transcriptStyles,
     contentDrawerStyles,
     bannerStyles,
+    consentStyles,
     css`
       :host {
         display: inline-block;
@@ -259,6 +269,31 @@ export class AddressWidget extends LitElement {
    */
   @property({ type: Boolean, reflect: true }) debug = false;
 
+  /**
+   * Require the user to consent to call recording before each fresh
+   * dial. The modal is shown on every launcher click as a pre-call
+   * setup step — pre-filled from any saved consent + device prefs so
+   * return users one-click through. Audio is required for the AI
+   * voice flow to function; video is a per-call preference (not
+   * consent — we record it but don't analyze it).
+   *
+   * On by default — opt out with `consent-required="false"` (attribute)
+   * or `consentRequired: false` (option). Consent state is forwarded
+   * to the SWML side as `userVariables.metadata.consent` so the agent
+   * can audit it.
+   */
+  @property({ attribute: 'consent-required', reflect: true, converter: boolDefaultTrue })
+  consentRequired = true;
+
+  /**
+   * Schema / policy version the consent record is tagged with. Bump
+   * this attribute when the consent copy or scope materially changes
+   * so previously-stored consent invalidates and users are re-prompted
+   * under the new terms. Defaults to 1.
+   */
+  @property({ attribute: 'consent-version', type: Number, reflect: true })
+  consentVersion = 2;
+
   @property({ attribute: 'user-variables', reflect: false })
   set userVariablesAttr(value: string | Record<string, unknown> | null | undefined) {
     if (value == null || value === '') {
@@ -282,6 +317,9 @@ export class AddressWidget extends LitElement {
 
   /** Raw sidecar-event callback. Set programmatically — not via attribute. */
   onSidecarEvent: WidgetOptions['onSidecarEvent'];
+
+  /** Fired when the user accepts the consent prompt. */
+  onConsentGiven: WidgetOptions['onConsentGiven'];
 
   // ─────────────────────────────────────────────────────────────────────
   // Reactive state
@@ -309,6 +347,38 @@ export class AddressWidget extends LitElement {
   @state() private _selectedVideoInputId: string | null = null;
   /** Inline status banner shown at the top of the overlay body. */
   @state() private _banner: BannerMessage | null = null;
+  /**
+   * Active consent record (origin-wide). Loaded from localStorage on
+   * mount, updated when the user accepts/edits, cleared by `close()`
+   * only if they explicitly reset. Null means "not yet given" — when
+   * `consentRequired` is true this triggers the modal on launcher
+   * click.
+   */
+  @state() private _consent: ConsentRecord | null = null;
+  /** True while the consent modal is open (pre-call or edit flow). */
+  @state() private _consentModalOpen = false;
+  /**
+   * Draft state of the modal's controls. Audio is always true (the
+   * checkbox is disabled-checked for transparency); video and device
+   * selections are the user-toggled fields.
+   */
+  @state() private _consentDraft: ConsentDraft = {
+    audio: true,
+    train: true,
+    camera: true,
+    audioDeviceId: null,
+    videoDeviceId: null
+  };
+  /** Devices enumerated on modal open (best-effort — labels may be
+   *  empty until first getUserMedia grants permission). */
+  @state() private _consentAudioDevices: MediaDeviceInfo[] = [];
+  @state() private _consentVideoDevices: MediaDeviceInfo[] = [];
+  /**
+   * Set when `_acceptConsent` re-enters `open()` to dial. Causes the
+   * consent gate inside `open()` to skip for that one call so we don't
+   * loop the modal back open.
+   */
+  private _consentBypassGate = false;
   /**
    * Insertion-ordered content ids so persisted content can be rehydrated
    * in the same order the user saw them. `_contentHistory` is a Map but
@@ -342,6 +412,7 @@ export class AddressWidget extends LitElement {
   private _transcriptRef = createTranscriptRef();
   private _audioRef = createRef<HTMLAudioElement>();
   private _remoteVideoRef = createRef<HTMLVideoElement>();
+  private _consentModalRef = createConsentModalRef();
   private _localVideoRef = createRef<HTMLVideoElement>();
   private _remoteStreamSub?: import('rxjs').Subscription;
   private _localStreamSub?: import('rxjs').Subscription;
@@ -396,6 +467,18 @@ export class AddressWidget extends LitElement {
     // Sweep this widget's stale orphans on every mount. Safe to call
     // whether or not we actually reattach.
     sweepOrphans(this.widgetId);
+    // Restore prior consent (origin-wide). Null means we'll prompt on
+    // launcher click if `consentRequired` is on.
+    this._consent = readConsent(this.consentVersion);
+    if (this._consent) {
+      this._consentDraft = {
+        audio: this._consent.audio,
+        train: this._consent.train,
+        camera: this._consent.camera,
+        audioDeviceId: this._consent.audioDeviceId,
+        videoDeviceId: this._consent.videoDeviceId
+      };
+    }
     if (this.autoReattach) {
       void this._attemptReattach();
     }
@@ -426,6 +509,98 @@ export class AddressWidget extends LitElement {
     // newly present. showModal() is what escapes ancestor stacking
     // contexts and containing blocks — the whole point of using <dialog>.
     this._syncDialogOpen();
+    // Same dance for the consent modal — it's a separate <dialog>.
+    this._syncConsentDialogOpen();
+  }
+
+  /** Open the consent / pre-call setup modal. Always opens as a
+   *  pass-through step on launcher click — pre-fills from any saved
+   *  consent + device prefs so return users one-click through. */
+  private _openConsentModal(): void {
+    // Seed the draft from the saved record (if any).
+    if (this._consent) {
+      this._consentDraft = {
+        audio: this._consent.audio,
+        train: this._consent.train,
+        camera: this._consent.camera,
+        audioDeviceId: this._consent.audioDeviceId,
+        videoDeviceId: this._consent.videoDeviceId
+      };
+    } else {
+      this._consentDraft = {
+        audio: true,
+        train: true,
+        camera: true,
+        audioDeviceId: null,
+        videoDeviceId: null
+      };
+    }
+    this._consentModalOpen = true;
+    // Enumerate devices best-effort. Labels are populated after the
+    // first getUserMedia grants permission; first-call users get
+    // generic "Microphone 1" / "Camera 1" fallback labels.
+    void this._refreshConsentDevices();
+  }
+
+  private async _refreshConsentDevices(): Promise<void> {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      this._consentAudioDevices = devices.filter((d) => d.kind === 'audioinput');
+      this._consentVideoDevices = devices.filter((d) => d.kind === 'videoinput');
+    } catch {
+      this._consentAudioDevices = [];
+      this._consentVideoDevices = [];
+    }
+  }
+
+  private _cancelConsentModal(): void {
+    this._consentModalOpen = false;
+  }
+
+  private async _acceptConsent(): Promise<void> {
+    // Audio is required; the Start button is disabled when unchecked,
+    // but defensively re-check here.
+    if (!this._consentDraft.audio) return;
+    const record = writeConsent(
+      this._consentDraft.audio,
+      this.consentVersion,
+      this._consentDraft.train,
+      this._consentDraft.camera,
+      this._consentDraft.audioDeviceId,
+      this._consentDraft.videoDeviceId
+    );
+    this._consent = record;
+    this._consentModalOpen = false;
+    // Tell consumers + the agent that consent was given.
+    this.onConsentGiven?.(record);
+    this.dispatchEvent(
+      new CustomEvent('signalwire-address:consent-given', {
+        detail: record,
+        bubbles: true,
+        composed: true
+      })
+    );
+    // Re-enter open() to dial, bypassing the consent gate this once.
+    this._consentBypassGate = true;
+    await this.open();
+  }
+
+  private _syncConsentDialogOpen(): void {
+    const dialog = this._consentModalRef.value;
+    if (!dialog) return;
+    if (this._consentModalOpen && !dialog.open) {
+      try {
+        dialog.showModal();
+      } catch {
+        dialog.setAttribute('open', '');
+      }
+    } else if (!this._consentModalOpen && dialog.open) {
+      try {
+        dialog.close();
+      } catch {
+        dialog.removeAttribute('open');
+      }
+    }
   }
 
   /**
@@ -477,6 +652,17 @@ export class AddressWidget extends LitElement {
       this._surfaceError('Missing destination. Configure the `destination` attribute.');
       return;
     }
+    // Gate on consent when the feature is on. The modal always opens
+    // on launcher click (it's a pre-call setup step, not a one-time
+    // consent wall) — it pre-fills from any saved consent so return
+    // users one-click through. Cancel bails out. `_acceptConsent`
+    // re-enters this method with `_consentBypassGate=true` so we
+    // don't loop the modal back open.
+    if (this.consentRequired && !this._consentBypassGate) {
+      this._openConsentModal();
+      return;
+    }
+    this._consentBypassGate = false;
 
     // Build the userVariables bag in precedence order (low → high):
     //   auto-identify block → widget's userVariables option → beforedial.setUserVariables
@@ -484,13 +670,35 @@ export class AddressWidget extends LitElement {
     //   `capabilities` — what the widget can render (contract)
     //   `metadata`     — page/client/widget context (session features)
     // Consumer userVariables override or extend either via a matching key.
+    const baseMetadata = this.autoIdentify ? this._buildMetadata() : {};
+    // Fold consent (if given) into metadata.consent so the agent /
+    // SWML can audit it. Stays in the metadata bag rather than at the
+    // top level to keep the public userVariables shape stable.
+    if (this._consent) {
+      const meta = baseMetadata as Record<string, unknown>;
+      meta.consent = {
+        audio: this._consent.audio,
+        train: this._consent.train,
+        given_at: this._consent.ts,
+        version: this._consent.version
+      };
+      // Hard-to-miss flag for the agent / SWML side: when the user
+      // declines training, surface a top-level boolean alongside the
+      // nested consent block so policy enforcement doesn't depend on
+      // reading the nested shape.
+      if (!this._consent.train) {
+        meta.no_training = true;
+      }
+    }
     const mergeVars: Record<string, unknown> = {
       ...(this.autoIdentify
         ? {
             capabilities: this._buildCapabilities(),
-            metadata: this._buildMetadata()
+            metadata: baseMetadata
           }
-        : {}),
+        : this._consent
+          ? { metadata: baseMetadata }
+          : {}),
       ...this._userVariables
     };
     const detail: BeforeDialDetail = {
@@ -596,17 +804,30 @@ export class AddressWidget extends LitElement {
   private async _startCall(userVariables: Record<string, unknown>): Promise<void> {
     try {
       this._client = await connectClient(this.token, { debug: this.debug });
-      const constraints = this.audio
+      const constraints: MediaTrackConstraints | undefined = this.audio
         ? {
             echoCancellation: this.echoCancellation,
             noiseSuppression: this.noiseSuppression,
-            autoGainControl: this.autoGainControl
+            autoGainControl: this.autoGainControl,
+            ...(this._consent?.audioDeviceId
+              ? { deviceId: { exact: this._consent.audioDeviceId } }
+              : {})
           }
         : undefined;
+      // Video send-side honors the user's camera-share preference
+      // when consent is on (false = don't send camera). Receive-side
+      // stays tied to the widget's video mode so the user can still
+      // see the remote (e.g. Sigmond's avatar) even when their own
+      // camera is off — we don't store video, so it's a preference,
+      // not a consent gate.
+      const sendVideo = this.consentRequired && this._consent
+        ? this.video && this._consent.camera
+        : this.video;
       const call = await this._client.dial({
         destination: this.destination,
         audio: this.audio,
-        video: this.video,
+        video: sendVideo,
+        receiveVideo: this.video,
         inputAudioDeviceConstraints: constraints,
         userVariables,
         ...(this.nodeId ? { nodeId: this.nodeId } : {})
@@ -1638,6 +1859,12 @@ export class AddressWidget extends LitElement {
     const hasContent = openContent !== null;
 
     return html`
+      ${renderConsentBadge({
+        show: this.consentRequired && this._consent !== null,
+        // Camera-on means video is flowing AND therefore being
+        // recorded server-side (we just don't analyze/train on it).
+        camera: this.video && (this._consent?.camera ?? false)
+      })}
       ${renderBanner({
         message: this._banner,
         onDismiss: () => {
@@ -1717,6 +1944,26 @@ export class AddressWidget extends LitElement {
             stacked: this._isStacked(),
             ariaLabel: `Call ${this.destination || 'SignalWire address'}`,
             body: this._renderBody()
+          })
+        : nothing}
+      ${this.consentRequired
+        ? renderConsentModal({
+            open: this._consentModalOpen,
+            draft: this._consentDraft,
+            showCameraOption: this.video,
+            audioDevices: this._consentAudioDevices,
+            videoDevices: this._consentVideoDevices,
+            dialogRef: this._consentModalRef,
+            onDraftChange: (field, value) => {
+              this._consentDraft = {
+                ...this._consentDraft,
+                [field]: value as never
+              };
+            },
+            onAccept: () => {
+              void this._acceptConsent();
+            },
+            onCancel: () => this._cancelConsentModal()
           })
         : nothing}
     `;

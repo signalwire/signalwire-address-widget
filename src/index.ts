@@ -92,6 +92,11 @@ export function mount(target: Target, options: WidgetOptions): AddressWidget {
   if (options.onSidecarEvent !== undefined) {
     widget.onSidecarEvent = options.onSidecarEvent;
   }
+  if (options.consentRequired !== undefined) widget.consentRequired = options.consentRequired;
+  if (options.consentVersion !== undefined) widget.consentVersion = options.consentVersion;
+  if (options.onConsentGiven !== undefined) {
+    widget.onConsentGiven = options.onConsentGiven;
+  }
 
   // Move existing children of target into the widget as slot content.
   // Consumer's own <img>/<button>/<span> etc. renders inside the launcher.
