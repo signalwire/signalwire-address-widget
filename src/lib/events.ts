@@ -83,6 +83,22 @@ function stripConfidence(text: string): string {
 }
 
 /**
+ * Strip TTS voice directives (`~LN(English (United States))-;`) that the
+ * server sometimes appends to `ai.response_utterance` and `ai.completion`
+ * text. They can appear at the start ("~LN(...)-; actual text") or
+ * mid-string when the server repeats the text for the TTS engine
+ * ("actual text ~LN(...)-; repeated text"). We keep whichever half has
+ * content. Ported from the SDK's TranscriptController._stripVoiceDirectives.
+ */
+function stripVoiceDirectives(text: string): string {
+  const match = /\s*~[A-Z]+\(.*?\)-;\s*/i.exec(text);
+  if (!match) return text.trim();
+  const before = text.slice(0, match.index).trim();
+  const after = text.slice(match.index + match[0].length).trim();
+  return (before || after).trim();
+}
+
+/**
  * A normalized "params" block. `call.subscribe` delivers the full signaling
  * envelope; we pull `.params` out for handlers.
  */
@@ -101,7 +117,15 @@ function extractParams(event: Record<string, unknown>): Record<string, unknown> 
 }
 
 function asString(v: unknown): string {
-  return typeof v === 'string' ? v : '';
+  if (typeof v !== 'string') return '';
+  // Backends occasionally serialize an unset field as the literal string
+  // "undefined" or "null" (a `String(someValue)` where someValue was unset).
+  // These would otherwise flow into a chat bubble reading "undefined". Treat
+  // them, and whitespace-only strings, as empty so the FSM's empty-text
+  // guards drop them cleanly.
+  const trimmed = v.trim();
+  if (!trimmed || trimmed === 'undefined' || trimmed === 'null') return '';
+  return v;
 }
 
 function asBool(v: unknown): boolean {
@@ -130,11 +154,13 @@ function routeEvent(
       break;
     }
     case 'ai.response_utterance': {
-      handlers.onAiChunk?.(asString(params.utterance ?? params.text), false);
+      const text = stripVoiceDirectives(asString(params.utterance ?? params.text));
+      handlers.onAiChunk?.(text, false);
       break;
     }
     case 'ai.completion': {
-      handlers.onAiComplete?.(asString(params.text), params.type === 'barged');
+      const text = stripVoiceDirectives(asString(params.text));
+      handlers.onAiComplete?.(text, params.type === 'barged');
       break;
     }
     case 'user_event': {

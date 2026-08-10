@@ -136,6 +136,35 @@ describe('ChatState', () => {
     expect(state.getHistory()).toEqual([]);
   });
 
+  it('drops empty user partials silently', () => {
+    state.onUserPartial('', false);
+    expect(state.getHistory()).toEqual([]);
+    expect(state.hasAny).toBe(false);
+  });
+
+  it('drops empty user completions and clears any lingering partial', () => {
+    state.onUserPartial('hell', false);
+    expect(state.hasAny).toBe(true);
+    state.onUserComplete('', false);
+    expect(state.getHistory()).toEqual([]);
+    expect(state.hasAny).toBe(false);
+  });
+
+  it('drops empty AI chunks without creating a blank partial', () => {
+    state.onAiChunk('', false);
+    expect(state.getHistory()).toEqual([]);
+    expect(state.hasAny).toBe(false);
+  });
+
+  it('keeps prior AI chunks intact when a later chunk is empty', () => {
+    state.onAiChunk('hello there', false);
+    state.onAiChunk('', false);
+    state.onAiChunk('friend', false);
+    const hist = state.getHistory();
+    expect(hist).toHaveLength(1);
+    if (hist[0].kind === 'bubble') expect(hist[0].text).toBe('hello there friend');
+  });
+
   it('preserves order across multiple turns', () => {
     // Turn 1: user says something
     state.onUserPartial('hello', false);

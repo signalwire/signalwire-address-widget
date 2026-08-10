@@ -116,12 +116,26 @@ export class ChatState {
   }
 
   public onUserPartial(text: string, _barged: boolean): void {
+    // Guard: an empty partial has nothing to show and would render as a
+    // blank bubble. Backends occasionally emit these when ASR fires without
+    // any recognized text (e.g. a stray silence frame). Drop silently.
+    if (!text) return;
     this._userPartial = { kind: 'bubble', speaker: 'user', text, state: 'partial' };
     this._lastSpoken = 'user';
     this.onUpdate();
   }
 
   public onUserComplete(text: string, _barged: boolean): void {
+    // Empty finalization: don't record a blank bubble. Clear any lingering
+    // partial so the pending UI clears too, and bail. Matches the newer
+    // SDK ChatState (packages/web-components/src/context/chat-state.ts).
+    if (!text) {
+      if (this._userPartial) {
+        this._userPartial = null;
+        this.onUpdate();
+      }
+      return;
+    }
     if (this._userPartial) {
       this._entries.push({ kind: 'bubble', speaker: 'user', text, state: 'complete' });
       this._userPartial = null;
@@ -135,6 +149,10 @@ export class ChatState {
   }
 
   public onAiChunk(text: string, _barged: boolean): void {
+    // Empty chunk: nothing to append. Guarding here also protects the
+    // template-literal concat below from ever producing a literal
+    // "undefined" segment if a caller ever passes an unchecked value.
+    if (!text) return;
     if (!this._aiPartial) {
       this._aiPartial = { kind: 'bubble', speaker: 'ai', text, state: 'partial' };
     } else {
@@ -185,14 +203,22 @@ export class ChatState {
    * Bulk-replace the completed entries with a snapshot. Used on reattach
    * to rehydrate from sessionStorage before any live subscriptions fire.
    * Partials are cleared — they're always in-flight, never persisted.
+   *
+   * Also filters bubbles whose text is missing / non-string / sentinel
+   * ("undefined", "null", whitespace-only). This defends against snapshots
+   * written by older widget builds that lacked the FSM's empty-text guards,
+   * so a stale entry can't resurface as a blank or "undefined" bubble on
+   * reload.
    */
   public loadSnapshot(entries: ChatEntry[]): void {
-    this._entries = entries.filter(
-      (e) =>
-        e.kind === 'content' ||
-        e.kind === 'insight' ||
-        (e.kind === 'bubble' && e.state === 'complete')
-    );
+    this._entries = entries.filter((e) => {
+      if (e.kind === 'content' || e.kind === 'insight') return true;
+      if (e.kind !== 'bubble' || e.state !== 'complete') return false;
+      if (typeof e.text !== 'string') return false;
+      const trimmed = e.text.trim();
+      if (!trimmed || trimmed === 'undefined' || trimmed === 'null') return false;
+      return true;
+    });
     this._aiPartial = null;
     this._userPartial = null;
     this._lastSpoken = null;
