@@ -37,6 +37,12 @@ export interface ControlsContext {
   onHangup: () => void;
   onSelectAudioDevice: (device: MediaDeviceInfo) => void;
   onSelectVideoDevice: (device: MediaDeviceInfo) => void;
+  /**
+   * Offered only when the widget can actually complete the switch — mode
+   * `both`, a configured gateway, and a redeemable nonce for this call.
+   * Omitted otherwise, so a voice-only widget never grows a dead button.
+   */
+  onSwitchToChat?: () => void;
 }
 
 export const controlsStyles = css`
@@ -128,6 +134,32 @@ export const controlsStyles = css`
   }
 
   /* Standalone hangup — pill-shaped, destructive red. */
+  /* Switch-to-text. Neutral, not accented: it sits beside End, and two
+     emphasised buttons next to each other make neither read as primary.
+     Turquoise on hover per the brand rule that it marks positive actions. */
+  .btn-switch {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: var(--sw-address-bg-raised);
+    color: var(--sw-address-fg-default);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .btn-switch:hover:not(:disabled) {
+    color: var(--sw-address-positive);
+  }
+  .btn-switch:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .btn-switch svg {
+    width: 20px;
+    height: 20px;
+    display: block;
+  }
+
   .btn-hangup {
     height: 48px;
     padding: 0 22px;
@@ -269,6 +301,10 @@ const iconHangup = html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColo
 
 const iconChevron = html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
   <polyline points="18 15 12 9 6 15" />
+</svg>`;
+
+const iconChat = html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
 </svg>`;
 
 // ─────────────────────────────────────────────────────────────────────
@@ -444,6 +480,22 @@ export function renderControls(ctx: ControlsContext): TemplateResult {
               ctx.selectedVideoInputId,
               ctx.onSelectVideoDevice
             )}
+          `
+        : nothing}
+
+      ${ctx.onSwitchToChat
+        ? html`
+            <button
+              part="switch-to-chat"
+              class="btn-switch"
+              type="button"
+              aria-label="Continue in text chat"
+              title="Continue in text chat"
+              ?disabled=${!callReady}
+              @click=${ctx.onSwitchToChat}
+            >
+              ${iconChat}
+            </button>
           `
         : nothing}
 

@@ -14,11 +14,13 @@
  * destination's voice) and fuchsia right-edge for user bubbles.
  */
 
-import { css, html } from 'lit';
+import { css, html, nothing } from 'lit';
 import { ref, createRef } from 'lit/directives/ref.js';
+import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import type { Ref } from 'lit/directives/ref.js';
 import type { TemplateResult } from 'lit';
 import type { ChatEntry } from './chat-state';
+import { renderMarkdown } from '../lib/markdown';
 
 export interface TranscriptContext {
   entries: ChatEntry[];
@@ -35,6 +37,17 @@ export interface TranscriptContext {
   openContentId: string | null;
   /** Fired when a content chip is clicked — reopens that payload's drawer. */
   onContentClick: (id: string) => void;
+  /**
+   * Optional image shown beside each agent reply. Omit for none — replies
+   * then sit flush left, which is the layout without this feature.
+   */
+  avatarUrl?: string | null;
+  /**
+   * One load failure retires the avatar for the session. A URL that 404s or
+   * is blocked by CSP would otherwise leave a broken-image glyph beside every
+   * single reply.
+   */
+  onAvatarError?: () => void;
 }
 
 export const transcriptStyles = css`
@@ -184,6 +197,149 @@ export const transcriptStyles = css`
     }
   }
 
+  /* Avatar column beside an agent reply. */
+  .bubble-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    align-self: flex-start;
+    max-width: 92%;
+  }
+  .bubble-row .bubble {
+    /* The row owns the alignment now; the bubble fills what is left. */
+    align-self: auto;
+    max-width: 100%;
+  }
+  .avatar {
+    /* Top of the reply, not vertically centred: a long answer would float
+       the avatar into the middle of its own paragraph. */
+    align-self: flex-start;
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    overflow: hidden;
+    /* Something behind a transparent PNG, plus a rim so a light avatar still
+       reads as a circle against the panel. */
+    background: var(--sw-address-bg-raised);
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+  }
+  .avatar img {
+    width: 100%;
+    height: 100%;
+    /* contain, not cover: scaled down whole rather than cropped, so a
+       character or logo keeps its head and its margins. */
+    object-fit: contain;
+    display: block;
+  }
+
+  /* Markdown inside a chat bubble. Chat replies are markdown — lists,
+     tables and fenced code are the normal case, not the exception — and
+     without these they rendered as an unstyled run of text. */
+  .bubble-md > *:first-child { margin-top: 0; }
+  .bubble-md > *:last-child { margin-bottom: 0; }
+  .bubble-md p { margin: 0 0 8px; }
+  .bubble-md ul,
+  .bubble-md ol { margin: 0 0 8px; padding-left: 20px; }
+  .bubble-md li { margin: 2px 0; }
+  .bubble-md h1,
+  .bubble-md h2,
+  .bubble-md h3 {
+    font-family: var(--sw-address-font-heading);
+    font-size: 15px;
+    font-weight: 600;
+    margin: 10px 0 6px;
+    color: var(--sw-address-fg-headings);
+  }
+  .bubble-md a {
+    color: var(--sw-address-accent);
+    text-decoration: underline;
+  }
+  .bubble-md blockquote {
+    margin: 6px 0;
+    padding-left: 10px;
+    border-left: 2px solid var(--sw-address-positive);
+    color: var(--sw-address-fg-muted);
+  }
+  /* Inline code: a chip, not a block. */
+  .bubble-md code {
+    font-family: var(--sw-address-font-code);
+    font-size: 12px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--sw-address-bg-subtle);
+  }
+  /* Fenced block: dark in both themes, matching the content drawer, because
+     a code palette that flips with the page theme reads as a bug. */
+  .bubble-md .code-block {
+    position: relative;
+    margin: 8px 0;
+    border-radius: 6px;
+    background: #1e1e1f;
+    border: 1px solid var(--sw-address-border);
+    overflow: hidden;
+  }
+  .bubble-md .code-block-lang {
+    display: block;
+    padding: 4px 10px;
+    font-family: var(--sw-address-font-code);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--sw-address-fg-muted);
+    background: #2a2a2e;
+  }
+  .bubble-md .code-block pre {
+    margin: 0;
+    padding: 10px;
+    overflow-x: auto;
+    max-height: 300px;
+  }
+  .bubble-md .code-block code {
+    background: none;
+    padding: 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #d4d4d8;
+  }
+  /* Tables scroll rather than widening the bubble. */
+  .bubble-md table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin: 8px 0;
+  }
+  .bubble-md th,
+  .bubble-md td {
+    border: 1px solid var(--sw-address-border);
+    padding: 4px 8px;
+    text-align: left;
+  }
+  .bubble-md img { max-width: 100%; border-radius: 6px; }
+
+  /* Conversation status line (currently only the chat idle-timeout notice).
+     Deliberately quiet — muted, centred, no accent edge. It is not a turn and
+     must not read like one, and it is not a warning either: the conversation
+     ending on idle is ordinary. Gold is reserved for actual warnings per the
+     brand rules, so this stays neutral. */
+  .notice {
+    align-self: center;
+    max-width: 85%;
+    padding: 6px 12px;
+    background: var(--sw-address-bg-raised);
+    border: 1px solid var(--sw-address-border);
+    border-radius: var(--sw-address-radius-sm);
+    color: var(--sw-address-fg-muted);
+    font-family: var(--sw-address-font-body);
+    font-size: 12px;
+    line-height: 1.45;
+    text-align: center;
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
+  }
+
   /* Content chip: minimized placeholder for a display_content push.
      Fuchsia-edged card that reads as a callable button. */
   .content-chip {
@@ -318,18 +474,40 @@ export const transcriptStyles = css`
  */
 function renderBubble(
   entry: ChatEntry & { kind: 'bubble' },
-  key: number
+  key: number,
+  avatarUrl?: string | null,
+  onAvatarError?: () => void
 ): TemplateResult {
   const part = entry.speaker === 'ai' ? 'bubble bubble-ai' : 'bubble bubble-user';
-  return html`<div
+  // Chat turns are typed or generated, so they carry markdown — lists,
+  // tables, fenced code — and render as such. Voice turns are speech and
+  // render as plain text: there is no markup in what someone said, and
+  // treating a transcript as markdown lets a stray asterisk silently
+  // italicise half a sentence. Partials stay plain either way; they are
+  // mid-stream and may hold a half-written fence.
+  const asMarkdown = entry.medium === 'chat' && entry.state === 'complete';
+  // Avatar only on the agent's side. A row wrapper keeps the bubble's own
+  // alignment intact while giving the image a column beside it.
+  const avatar =
+    avatarUrl && entry.speaker === 'ai'
+      ? html`<div class="avatar" aria-hidden="true">
+          <img src=${avatarUrl} alt="" @error=${() => onAvatarError?.()} />
+        </div>`
+      : nothing;
+  const bubble = html`<div
     part=${part}
     class="bubble"
     data-speaker=${entry.speaker}
     data-state=${entry.state}
+    data-medium=${entry.medium ?? 'voice'}
     data-key=${key}
   >
-    ${entry.text}
+    ${asMarkdown
+      ? html`<div class="bubble-md">${unsafeHTML(renderMarkdown(entry.text))}</div>`
+      : entry.text}
   </div>`;
+  if (avatar === nothing) return bubble;
+  return html`<div class="bubble-row" data-key=${key}>${avatar}${bubble}</div>`;
 }
 
 const openIcon = html`<svg
@@ -371,6 +549,27 @@ function renderInsight(
   >
     <span class="insight-eyebrow">${entry.label ?? 'Coach'}</span>
     <span class="insight-text">${entry.text}</span>
+  </div>`;
+}
+
+/**
+ * A status line about the conversation, not a turn in it. Centred, no bubble,
+ * no avatar column, no timestamp — its own branch rather than a styled-down
+ * bubble, so it cannot inherit bubble padding or a speaker alignment.
+ * Rendered as plain text: the only source is our own copy, never the model.
+ */
+function renderNotice(
+  entry: ChatEntry & { kind: 'notice' },
+  key: number
+): TemplateResult {
+  return html`<div
+    part="notice"
+    class="notice"
+    role="status"
+    aria-live="polite"
+    data-key=${key}
+  >
+    ${entry.text}
   </div>`;
 }
 
@@ -418,9 +617,11 @@ export function renderTranscript(ctx: TranscriptContext): TemplateResult {
       <header class="transcript-header">Transcript</header>
       <div class="transcript-body" ${ref(ctx.scrollRef)}>
         ${ctx.entries.map((e, i) => {
-          if (e.kind === 'bubble') return renderBubble(e, i);
+          if (e.kind === 'bubble')
+            return renderBubble(e, i, ctx.avatarUrl, ctx.onAvatarError);
           if (e.kind === 'content')
             return renderContentChip(e, i, ctx.openContentId, ctx.onContentClick);
+          if (e.kind === 'notice') return renderNotice(e, i);
           return renderInsight(e, i);
         })}
       </div>

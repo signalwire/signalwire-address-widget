@@ -43,6 +43,10 @@ import type { ConsentDraft } from './components/consent';
 
 import { connectClient } from './lib/client';
 import type { ConnectedClient } from './lib/client';
+import { DEFAULT_TIMEOUT_SECONDS } from './lib/expiry';
+import { ChatSession } from './lib/chat-session';
+import { composerStyles, renderComposer } from './components/composer';
+import { mediumPickerStyles, renderMediumPicker } from './components/medium-picker';
 import { wireCallEvents } from './lib/events';
 import { detectPlatform, safeTimezone, safeMatchMedia } from './lib/env';
 import { readConsent, writeConsent } from './lib/consent';
@@ -62,6 +66,9 @@ import {
 import type {
   Theme,
   Layout,
+  Mode,
+  Presentation,
+  PanelPosition,
   WidgetOptions,
   DisplayContentPayload,
   UserEventPayload,
@@ -103,6 +110,8 @@ export class AddressWidget extends LitElement {
     contentDrawerStyles,
     bannerStyles,
     consentStyles,
+    composerStyles,
+    mediumPickerStyles,
     css`
       :host {
         display: inline-block;
@@ -166,9 +175,19 @@ export class AddressWidget extends LitElement {
 
   @property({ type: String, reflect: true }) theme: Theme = 'dark';
 
-  @property({ type: Boolean, reflect: true }) video = true;
+  /**
+   * Enable outgoing video. Default true.
+   *
+   * Uses `boolDefaultTrue` rather than Lit's built-in Boolean converter,
+   * which resolves ANY attribute presence to true — so the documented
+   * `video="false"` opt-out silently kept the camera on. Every other
+   * default-true boolean on this element already used the custom
+   * converter; these two were the outliers.
+   */
+  @property({ reflect: true, converter: boolDefaultTrue }) video = true;
 
-  @property({ type: Boolean, reflect: true }) audio = true;
+  /** Enable outgoing audio. Default true. Same converter rationale as `video`. */
+  @property({ reflect: true, converter: boolDefaultTrue }) audio = true;
 
   /**
    * Optional custom poster image URL. In video mode it replaces the
@@ -183,6 +202,140 @@ export class AddressWidget extends LitElement {
    * `stacked` = always stacked (video smaller on top, transcript below).
    */
   @property({ type: String, reflect: true }) layout: Layout = 'auto';
+
+  /**
+   * Which transports this widget offers: `voice` (default), `chat`, or
+   * `both`. See the `Mode` type. `chat`/`both` require `gateway-url` and
+   * `chat-key`; `voice`/`both` require `token`.
+   */
+  @property({ type: String, reflect: true }) mode: Mode = 'voice';
+
+  /**
+   * Which transport opens first when `mode="both"`. Ignored otherwise.
+   *
+   *   - `voice` (default) — dial immediately, the widget's original behaviour
+   *   - `chat`  — open text immediately
+   *   - `ask`   — show a picker and let the visitor choose
+   *
+   * `ask` is not only a UX choice: opening chat calls `start()`, and the
+   * agent's greeting is a billable turn, so committing to a medium before the
+   * visitor has expressed one spends money on a guess. It also defers the
+   * microphone permission prompt until someone has actually asked for voice.
+   */
+  @property({ attribute: 'default-mode', reflect: true })
+  defaultMode: 'voice' | 'chat' | 'ask' = 'voice';
+
+  /**
+   * Overlay presentation — `immersive` (default) or `panel`. Applies to
+   * BOTH mediums: chat is immersive by default too, so switching medium
+   * changes the content rather than the surface. See the `Presentation`
+   * type for why panel sizing is inert in immersive mode.
+   */
+  @property({ type: String, reflect: true })
+  presentation: Presentation = 'immersive';
+
+  /** Corner anchoring when `presentation="panel"`. Ignored when immersive. */
+  @property({ type: String, reflect: true })
+  position: PanelPosition = 'bottom-right';
+
+  /**
+   * Chat gateway URL — a `ChatGateway` mounted by the Python SDK. Required
+   * for `mode="chat"` and `mode="both"`.
+   *
+   * Note there is no trailing-slash normalisation anywhere in the chat
+   * path: the gateway's route IS `/`, so a bare origin must keep it.
+   */
+  @property({ attribute: 'gateway-url', reflect: true }) gatewayUrl = '';
+
+  /**
+   * Publishable key for the chat gateway, sent as `Authorization: Bearer`.
+   *
+   * Safe in the page by design, and NOT reflected — unlike `token` (a SAT)
+   * this is a public credential, but there is still no reason to write it
+   * back into the DOM. The gateway injects `config_url` server-side, so a
+   * key lifted from the page reaches only the agent it was issued for.
+   */
+  @property({ attribute: 'chat-key', reflect: false }) chatKey = '';
+
+  /**
+   * Image shown beside each agent reply in chat. Scaled to fit the circle
+   * whole rather than cropped, so a logo with its own margins survives.
+   * Omit for no avatar.
+   */
+  @property({ attribute: 'avatar-url', reflect: true }) avatarUrl: string | null = null;
+
+  /** Composer placeholder text. */
+  @property({ attribute: 'chat-placeholder', reflect: true })
+  chatPlaceholder = 'Type a message...';
+
+  /**
+   * Let the caller type during a VOICE call. Off by default.
+   *
+   * Not a transport and not related to `mode`: the text is injected into the
+   * live call as the caller's own turn and the agent answers out loud, so the
+   * call never stops being a call. Useful when speech is the wrong input —
+   * a noisy room, a URL or an order number that ASR keeps mangling — while
+   * still wanting the answer spoken.
+   *
+   * Distinct from switching to chat, which stops the speaking entirely.
+   * Requires `gateway-url`, because the injection endpoint is served
+   * alongside the chat gateway; it does NOT require `chat-key`.
+   */
+  @property({ attribute: 'type-to-talk', reflect: true, type: Boolean })
+  typeToTalk = false;
+
+  /**
+   * Composer placeholder while on a voice call, if `type-to-talk` is on.
+   * Kept short — the voice dock leaves the input far less room than chat
+   * mode does, and a longer string simply truncates.
+   */
+  @property({ attribute: 'type-to-talk-placeholder', reflect: true })
+  typeToTalkPlaceholder = 'Or type…';
+
+  /**
+   * Reopen the widget automatically when a reload resumes a conversation
+   * that had not ended. The voice path already does this via
+   * `auto-reattach`; this is the chat half, and the same rule applies —
+   * RESUME only. A brand new conversation never opens unprompted, because
+   * that is an interruption rather than a restoration.
+   */
+  @property({ attribute: 'chat-auto-open', reflect: true, converter: boolDefaultTrue })
+  chatAutoOpen = true;
+
+  /**
+   * Resume a chat conversation across a reload. The handle lives in
+   * sessionStorage, so it is scoped to the TAB: a reload keeps the
+   * conversation, a second tab starts its own, and closing the tab ends it.
+   * That is what a visitor expects a chat window to do, and it is why this
+   * is not localStorage. Separate from `auto-reattach`, which is the voice
+   * path's equivalent.
+   */
+  @property({ attribute: 'chat-persistence', reflect: true, converter: boolDefaultTrue })
+  chatPersistence = true;
+
+  /** sessionStorage key for the chat handle. Change only to run two widgets on one origin. */
+  @property({ attribute: 'chat-storage-key', reflect: true })
+  chatStorageKey = 'sw-chat-handle';
+
+  /** Ignore any stored chat handle and always open a fresh conversation. */
+  @property({ attribute: 'chat-always-new', reflect: true, type: Boolean })
+  chatAlwaysNew = false;
+
+  /** End the chat conversation server-side when the overlay closes. */
+  @property({ attribute: 'chat-end-on-close', reflect: true, type: Boolean })
+  chatEndOnClose = false;
+
+  /**
+   * Idle seconds after which the chat service ends the conversation, used to
+   * warn that the next message starts a new one. `0` disables the notice.
+   *
+   * A fallback only: the gateway reports the real value on `start`/`log` and
+   * that wins. It is an approximation on purpose — the service sweeps for
+   * idle conversations periodically, so the real end lags this. Erring early
+   * is the safe direction.
+   */
+  @property({ attribute: 'chat-timeout-seconds', type: Number, reflect: true })
+  chatTimeoutSeconds: number = DEFAULT_TIMEOUT_SECONDS;
 
   /**
    * Whether to render the local self-view overlay. Default true. Attribute
@@ -348,6 +501,20 @@ export class AddressWidget extends LitElement {
   /** Inline status banner shown at the top of the overlay body. */
   @state() private _banner: BannerMessage | null = null;
   /**
+   * Which transport is currently driving the conversation. Distinct from
+   * `mode`, which is what the widget is *allowed* to do — this is what it is
+   * doing right now, and it flips on a medium switch.
+   */
+  @state() private _activeMedium: 'voice' | 'chat' = 'voice';
+  /** A chat turn is in flight (restore, start, or send). */
+  @state() private _chatBusy = false;
+  /**
+   * The overlay is showing the medium picker and nothing has been started.
+   * Distinct from "no call yet" — this is a deliberate pause, not a
+   * connecting state, and the overlay must not render a call's chrome.
+   */
+  @state() private _picking = false;
+  /**
    * Active consent record (origin-wide). Loaded from localStorage on
    * mount, updated when the user accepts/edits, cleared by `close()`
    * only if they explicitly reset. Null means "not yet given" — when
@@ -380,6 +547,29 @@ export class AddressWidget extends LitElement {
    */
   private _consentBypassGate = false;
   /**
+   * Set once the visitor has answered the medium picker, so re-entering
+   * `open()` to run the normal dial path doesn't just show the picker again.
+   * Same shape as `_consentBypassGate`, and cleared on close so the next
+   * visit asks afresh.
+   */
+  private _mediumBypassGate = false;
+  /**
+   * True while a medium switch is tearing down its old transport. Suppresses
+   * the call-ended handler, which otherwise cannot distinguish "the call
+   * ended, close the widget" from "we ended the call on purpose because the
+   * conversation is moving to text".
+   */
+  private _switchingMedium = false;
+  /** One-shot guard so auto-open-on-resume cannot fight the close button. */
+  private _chatAutoOpened = false;
+  /** One-shot guard for the deferred chat restore — see _maybeRestoreChat. */
+  private _chatRestoreAttempted = false;
+  /**
+   * A single avatar load failure retires it for the session. Without this a
+   * 404 or CSP-blocked image leaves a broken-image glyph beside every reply.
+   */
+  @state() private _avatarBroken = false;
+  /**
    * Insertion-ordered content ids so persisted content can be rehydrated
    * in the same order the user saw them. `_contentHistory` is a Map but
    * Map iteration order is only stable if we never re-key; keeping a
@@ -404,6 +594,28 @@ export class AddressWidget extends LitElement {
   // SWML script picks one mode), but the widget renders whichever has
   // entries.
   private _transcribeChat = new ChatState();
+  /**
+   * The chat transport, when `mode` includes it. Owns its own handle,
+   * persistence and idle clock; feeds the SAME `_chat` transcript the voice
+   * path does, which is what lets a conversation span both mediums in one
+   * panel instead of two.
+   */
+  private _chatSession: ChatSession | null = null;
+  /**
+   * A chat handle captured for the next dial, set by `switchToVoice` before
+   * the local session is detached. Consumed once, by the dial it was captured
+   * for.
+   */
+  private _pendingChatHandoff: string | null = null;
+  /**
+   * Random per-call token proving this browser is the party on the call.
+   * Sent once, inside the dial's userVariables, and redeemed at the agent for
+   * a chat handle when the visitor presses "switch to text" — the button path
+   * cannot use the SWAIG tool, because that only fires if the model chooses
+   * to call it.
+   */
+  private _handoffNonce: string | null = null;
+  private _composerRef = createRef<HTMLTextAreaElement>();
   private _unwireEvents: (() => void) | null = null;
   private _previouslyFocused: HTMLElement | null = null;
   private _previousBodyOverflow = '';
@@ -438,6 +650,473 @@ export class AddressWidget extends LitElement {
   private _reattaching = false;
 
   // ─────────────────────────────────────────────────────────────────────
+  // Chat transport
+  // ─────────────────────────────────────────────────────────────────────
+
+  /** Whether this widget is configured to talk over chat at all. */
+  private _chatEnabled(): boolean {
+    return (this.mode === 'chat' || this.mode === 'both') && !!this.gatewayUrl && !!this.chatKey;
+  }
+
+  /**
+   * Build the chat session lazily, once. Its callbacks feed the same
+   * `_chat` transcript the voice path writes to — a chat reply and a spoken
+   * reply are the same conversation, and after a switch they sit in the same
+   * scroll.
+   */
+  private _ensureChatSession(): ChatSession | null {
+    if (this._chatSession) return this._chatSession;
+    if (!this._chatEnabled()) return null;
+
+    this._chatSession = new ChatSession(
+      {
+        gatewayUrl: this.gatewayUrl,
+        key: this.chatKey,
+        debug: this.debug,
+        storageKey: this.chatStorageKey,
+        persistence: this.chatPersistence,
+        alwaysNew: this.chatAlwaysNew,
+        timeoutSeconds: this.chatTimeoutSeconds,
+        connectionError: undefined
+      },
+      {
+        onUser: (text) => {
+          this._chat.medium = 'chat';
+          this._chat.onUserComplete(text, false);
+          this._scheduleTranscriptScroll();
+        },
+        onAssistant: (text, userEvent) => {
+          this._chat.medium = 'chat';
+          this._chat.onAiComplete(text, false);
+          this._scheduleTranscriptScroll();
+          // Same handler the voice path uses, so `display_content` opens the
+          // drawer identically on both transports and chips survive a switch.
+          if (userEvent) this._handleUserEvent(userEvent as UserEventPayload);
+        },
+        onRestored: (messages) => {
+          this._chat.medium = 'chat';
+          this._chat.replaceWithTranscript(messages);
+          this._scheduleTranscriptScroll();
+        },
+        onNotice: (text) => {
+          this._chat.pushNotice(text);
+          this._scheduleTranscriptScroll();
+          // A chat that timed out IS over — same as a call that hung up.
+          // The session has already dropped its handle; this makes the UI
+          // agree, so a reload starts fresh instead of resuming something
+          // the service has closed.
+          if (this._activeMedium === 'chat') {
+            this._forgetLastMedium();
+          }
+        },
+        onLoading: (loading) => {
+          this._chatBusy = loading;
+          // The composer is disabled while busy, which blurs it. Restore
+          // focus when the turn lands so the next message can just be typed.
+          if (!loading) this._refocusComposer();
+        },
+        onError: (message) => {
+          this._error = message;
+        },
+        onResumed: () => {
+          this._activeMedium = 'chat';
+          this._rememberLastMedium('chat');
+          // Reopen on resume, once. The guard matters: without it, closing
+          // the widget would immediately reopen it, because `resumed` stays
+          // true for the life of the conversation.
+          if (this.chatAutoOpen && !this._chatAutoOpened) {
+            this._chatAutoOpened = true;
+            void this.open();
+          }
+        }
+      }
+    );
+    return this._chatSession;
+  }
+
+  /**
+   * Mint this call's handoff nonce, if a button-triggered switch is possible.
+   *
+   * `crypto.randomUUID` where available; the fallback is only for old
+   * browsers and is still 128 bits from `getRandomValues`. Nothing about
+   * this is a secret in the cryptographic sense — it just has to be
+   * unguessable for its one-hour life.
+   */
+  private _mintHandoffNonceVars(): Record<string, unknown> {
+    if (!this._chatEnabled()) {
+      this._handoffNonce = null;
+      return {};
+    }
+    let nonce: string;
+    try {
+      nonce =
+        typeof crypto?.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : Array.from(crypto.getRandomValues(new Uint8Array(16)))
+              .map((b) => b.toString(16).padStart(2, '0'))
+              .join('');
+    } catch {
+      // No crypto at all — skip the button path rather than issue something
+      // guessable. The model-invoked switch_to_chat still works.
+      this._handoffNonce = null;
+      return {};
+    }
+    this._handoffNonce = nonce;
+    return { handoff_nonce: nonce };
+  }
+
+  /** Whether a "switch to text" affordance should be offered right now. */
+  private _canSwitchToChat(): boolean {
+    return (
+      this.mode === 'both' &&
+      this._activeMedium === 'voice' &&
+      this._chatEnabled() &&
+      !!this._handoffNonce &&
+      !!this._call
+    );
+  }
+
+  /**
+   * Move this call to text at the visitor's request rather than the model's.
+   *
+   * Redeems the nonce for a handle, then joins the same path the
+   * model-invoked handoff uses. The nonce is why this exists: a handle can
+   * only be minted server-side, and the gateway refuses to open a chat on a
+   * conversation the browser names, so the browser needs something that
+   * proves which call it is on without naming anything.
+   */
+  async switchToChat(): Promise<void> {
+    const nonce = this._handoffNonce;
+    if (!nonce || !this._chatEnabled()) return;
+
+    this._showBanner({ level: 'info', text: 'Switching to text…' });
+
+    // Set BEFORE the request, not inside _handleChatHandoff. /handoff now
+    // hangs the call up SERVER-side so its post-prompt fires immediately, so
+    // call.status$ goes disconnected while this fetch is still in flight —
+    // i.e. before the old guard was ever set, and the widget closed itself
+    // mid-switch.
+    this._switchingMedium = true;
+    const endpoint = this.gatewayUrl.replace(/\/+$/, '') + '/handoff';
+
+    let handle = '';
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nonce })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as { handle?: string };
+      handle = typeof data.handle === 'string' ? data.handle : '';
+    } catch (err) {
+      console.warn('[address-widget] handoff redemption failed', err);
+    }
+
+    if (!handle) {
+      // The server may already have hung the call up before failing, so the
+      // guard has to come off or the widget can never close itself again.
+      this._switchingMedium = false;
+      this._showBanner({
+        level: 'warning',
+        text: "Couldn't switch to text — staying on the call.",
+        dismissible: true
+      });
+      return;
+    }
+
+    // Single-use server-side; drop ours so the button can't be pressed twice.
+    this._handoffNonce = null;
+    await this._handleChatHandoff({ type: 'chat_handoff', handle });
+  }
+
+  /**
+   * Move a live call to text chat, carrying the conversation.
+   *
+   * The widget owns the teardown ordering, and that is the point. sigmond3's
+   * `switch_to_chat` deliberately does NOT hang up: a server-side hangup could
+   * beat the `chat_handoff` user_event to the browser, and the handoff would
+   * be lost with no way to recover it. So the server mints and announces, and
+   * we decide when the call actually ends.
+   *
+   * The transcript is deliberately NOT cleared. Visual continuity is local and
+   * instant — the voice turns are already on screen. The model's context
+   * arrives separately, server-side, because a browser-supplied conversation
+   * history would be a prompt-injection vector: a malicious host page could
+   * hand the agent a fabricated exchange.
+   */
+  private async _handleChatHandoff(payload: UserEventPayload): Promise<void> {
+    const handle = typeof payload.handle === 'string' ? payload.handle : '';
+    if (!handle) {
+      console.warn('[address-widget] chat_handoff without a handle', payload);
+      return;
+    }
+
+    const session = this._ensureChatSession();
+    if (!session) {
+      // The agent offered something this widget cannot do. Say so rather
+      // than silently dropping the call.
+      console.warn(
+        '[address-widget] chat_handoff received but chat is not configured ' +
+          '(needs gateway-url and chat-key)'
+      );
+      this._showBanner({
+        level: 'warning',
+        text: 'Text chat is not available here.',
+        dismissible: true
+      });
+      return;
+    }
+
+    this._showBanner({ level: 'info', text: 'Switching to text…' });
+
+    // Set BEFORE teardown: hanging up drives call.status$ to disconnected,
+    // which the call-ended subscriber would otherwise read as a reason to
+    // close the whole overlay.
+    this._switchingMedium = true;
+    try {
+      // Releases the call, media and client but leaves the overlay open and
+      // the transcript intact — the visitor stays in the same surface.
+      await this._teardown();
+
+      this._activeMedium = 'chat';
+      this._chat.medium = 'chat';
+      this._rememberLastMedium('chat');
+      this._banner = null;
+
+      await session.adoptHandle(handle);
+    } finally {
+      // Cleared in a finally so a failed handoff cannot leave the widget
+      // permanently unable to close itself when a later call ends.
+      this._switchingMedium = false;
+    }
+    this._refocusComposer();
+  }
+
+  /**
+   * userVariables carrying an in-progress chat conversation into a voice
+   * call, so the agent can pick up where the text left off.
+   *
+   * Empty unless there is actually a live chat handle — a cold voice call
+   * must not send a stale one, or the agent would seed itself from a
+   * conversation the visitor considers finished.
+   */
+  private _takeChatHandoffVars(): Record<string, unknown> {
+    const handle = this._pendingChatHandoff ?? this._chatSession?.currentHandle;
+    // Consumed, not read: a handle must seed exactly one call. Leaving it set
+    // would let a later, unrelated dial pick up a conversation the visitor
+    // considers finished.
+    this._pendingChatHandoff = null;
+    if (!handle) return {};
+    return { chat_handle: handle };
+  }
+
+  /**
+   * Move an in-progress chat to a voice call.
+   *
+   * Mirrors the voice→chat direction: the chat conversation is ended (one
+   * conversation, one active transport) and the handle rides along on the
+   * dial so the agent can recover its id and seed the call with what was
+   * already said.
+   */
+  async switchToVoice(): Promise<void> {
+    if (this._activeMedium !== 'chat') return;
+    if (!this.token || !this.destination) {
+      this._surfaceError('Voice is not configured for this widget.');
+      return;
+    }
+
+    const session = this._chatSession;
+    const handle = session?.currentHandle ?? null;
+
+    // No eager surface swap here. The capture is a live chat_log read now —
+    // no summarizer, no waiting on a post-prompt — so this is fast enough
+    // that flipping to a connecting poster first just added a flash of
+    // empty call UI before the real one.
+    this._showBanner({ level: 'info', text: 'Starting a call…' });
+
+    // End the chat leg and wait for its summary BEFORE dialing. The agent
+    // does the ending and the waiting; we just don't proceed until it says
+    // the record is written. Without this the call's SWML fetch races a
+    // post-prompt that is still seconds away, and the call opens knowing
+    // nothing — which is what all the polling used to paper over.
+    if (handle) {
+      try {
+        const res = await fetch(this.gatewayUrl.replace(/\/+$/, '') + '/escalate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ handle })
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      } catch (err) {
+        // Proceed anyway: a call with thin context beats refusing to place
+        // one the visitor explicitly asked for.
+        console.warn('[address-widget] chat leg capture failed', err);
+      }
+    }
+
+    // Detach locally rather than ending again — the agent already closed the
+    // conversation as part of capturing it.
+    this._pendingChatHandoff = handle;
+    session?.detach();
+
+    this._activeMedium = 'voice';
+    this._chat.medium = 'voice';
+    // Already chosen — this re-enters open(), which must dial rather than
+    // present the picker again.
+    this._mediumBypassGate = true;
+
+    // Back to closed so `open()` runs its normal path — consent gate
+    // included. A switch into voice needs microphone permission and, where
+    // configured, recording consent; skipping those because the conversation
+    // happened to start in text would quietly bypass both.
+    this._overlayState = 'closed';
+    await this.open();
+  }
+
+  /**
+   * Whether typing is available right now on a live voice call.
+   *
+   * Needs `gateway-url` for the endpoint but deliberately NOT `chat-key`:
+   * that route authorizes on the per-call nonce, not the publishable key,
+   * because what it has to prove is "you are on this call" rather than "you
+   * may talk to this agent".
+   */
+  private _typeToTalkAvailable(): boolean {
+    return (
+      this.typeToTalk &&
+      this._activeMedium === 'voice' &&
+      !!this.gatewayUrl &&
+      !!this._handoffNonce &&
+      !!this._call
+    );
+  }
+
+  /**
+   * Send a typed message into the live call.
+   *
+   * Echoed into the transcript locally, because nothing will echo it for us:
+   * our user bubbles come from `ai.speech_detect`, which is ASR of actual
+   * audio, and a typed message never passes through it. Echoed optimistically
+   * so the caller sees their words immediately rather than after a round trip
+   * they have no other feedback on.
+   */
+  private async _sendTypedMessage(text: string): Promise<void> {
+    const nonce = this._handoffNonce;
+    if (!nonce || !text.trim()) return;
+
+    // Deliberately NOT echoed locally. The engine inserts the injected text
+    // into the conversation itself and it comes back down the same event
+    // stream a spoken turn would, so echoing here produced the message twice.
+    const endpoint = this.gatewayUrl.replace(/\/+$/, '') + '/say';
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nonce, text: text.trim() })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      console.warn('[address-widget] typed message failed', err);
+      this._showBanner({
+        level: 'warning',
+        text: "That message may not have been delivered.",
+        dismissible: true
+      });
+    }
+  }
+
+  /**
+   * Replay a stored chat conversation, once, as soon as the host has actually
+   * configured us.
+   *
+   * Deliberately NOT in connectedCallback. That fires when the element
+   * upgrades during parsing, but `gateway-url` is usually set as a PROPERTY
+   * from a script — it is only known at runtime, so the documented pattern is
+   * `el.gatewayUrl = resolveGateway()` after the element is in the DOM. At
+   * upgrade time the config is still empty, `_chatEnabled()` is false, and the
+   * restore silently never happened: reload a live chat and it came back
+   * blank and closed.
+   *
+   * `updated()` runs on every render, so this catches the config whenever it
+   * lands — attribute, property, or a host that configures late.
+   *
+   * Still the only load-time chat work, and still just a `log` read. Reads are
+   * not billed; opening a conversation is, so that waits for `open()`.
+   */
+  private _maybeRestoreChat(): void {
+    if (this._chatRestoreAttempted) return;
+    if (!this._chatEnabled()) return;
+    this._chatRestoreAttempted = true;
+    // Re-derive now that the config exists; the value computed at
+    // connectedCallback was based on an unconfigured widget.
+    this._activeMedium = this._leadMedium();
+    void this._ensureChatSession()?.restore();
+  }
+
+  /** sessionStorage key recording which medium was last active, per widget. */
+  private get _lastMediumKey(): string {
+    return `swaw:medium/${this.widgetId}`;
+  }
+
+  /**
+   * Remember the active medium so a reload knows what to restore into.
+   * Tab-scoped like the chat handle it accompanies — a conversation does not
+   * outlive the tab it happened in.
+   */
+  private _rememberLastMedium(medium: 'voice' | 'chat'): void {
+    try {
+      sessionStorage.setItem(this._lastMediumKey, medium);
+    } catch {
+      /* private mode — resume is best-effort, same as the handle itself */
+    }
+  }
+
+  /** Called when a conversation genuinely ends, by either medium. */
+  private _forgetLastMedium(): void {
+    try {
+      sessionStorage.removeItem(this._lastMediumKey);
+    } catch {
+      /* noop */
+    }
+  }
+
+  /**
+   * End the chat conversation outright — the chat counterpart of hanging up.
+   * Distinct from closing the overlay, which only hides it.
+   */
+  private async _endChat(): Promise<void> {
+    await this._chatSession?.end();
+    this._forgetLastMedium();
+    this._chat.reset();
+    await this.close();
+  }
+
+  /** Send a composed chat message. */
+  private _sendChatMessage(text: string): void {
+    const session = this._ensureChatSession();
+    if (!session) return;
+    this._activeMedium = 'chat';
+    void session.send(text);
+  }
+
+  /**
+   * Put focus back in the composer after a turn completes. Deferred a tick
+   * because the textarea is still `disabled` at the moment the state flips,
+   * and focusing a disabled element is a no-op.
+   */
+  private _refocusComposer(): void {
+    if (this._activeMedium !== 'chat') return;
+    setTimeout(() => this._composerRef.value?.focus(), 0);
+  }
+
+  private _scheduleTranscriptScroll(): void {
+    void this.updateComplete.then(() =>
+      autoScrollTranscript(this._transcriptRef.value)
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
   // Lifecycle
   // ─────────────────────────────────────────────────────────────────────
 
@@ -451,6 +1130,11 @@ export class AddressWidget extends LitElement {
     this._transcribeChat.onUpdate = () => {
       this._chatVersion++;
     };
+    // Lead medium decides what the launcher opens onto.
+    this._activeMedium = this._leadMedium();
+    // NOTE: the chat restore deliberately does NOT happen here — see
+    // _maybeRestoreChat(), called from updated(). At this point the host may
+    // not have configured us yet.
     // Assign a stable widget id before any reattach logic runs so we can
     // key sessionStorage by it. Explicit widget-id attribute wins;
     // otherwise we use the zero-based document-order index among all
@@ -497,9 +1181,15 @@ export class AddressWidget extends LitElement {
       clearTimeout(this._bannerTimer);
       this._bannerTimer = undefined;
     }
+    // Releases the idle-clock interval and its visibilitychange/focus
+    // listeners. Deliberately does NOT end the conversation — the handle
+    // survives in sessionStorage so a remount resumes it.
+    this._chatSession?.destroy();
   }
 
   override updated(): void {
+    this._maybeRestoreChat();
+
     // Auto-scroll the transcript on every update once it has been
     // rendered. Safe to call regardless of whether the transcript is
     // visible; it no-ops when the ref is not resolved yet.
@@ -638,12 +1328,41 @@ export class AddressWidget extends LitElement {
   // Public programmatic API
   // ─────────────────────────────────────────────────────────────────────
 
-  /** Open the overlay and begin dialing. */
+  /** Open the overlay, on whichever medium this widget leads with. */
   async open(): Promise<void> {
     if (this._overlayState !== 'closed') return;
     // Let an in-flight reattach finish (or fail) before we start a
     // fresh dial — otherwise we'd double-connect the client.
     if (this._reattaching) return;
+
+    // Ask first: open onto the picker and start nothing. No dial, no
+    // getUserMedia, no billable greeting until the visitor has said which
+    // they want. `_choose*` below resumes from here.
+    if (this._shouldAskMedium()) {
+      this._picking = true;
+      await this._openOverlay();
+      return;
+    }
+
+    // Chat-led: no token, no dial, no media permissions. Opening is also the
+    // first moment the visitor has shown intent, and therefore the first
+    // moment it is fair to charge for a turn — the greeting is a turn, so
+    // `ensureStarted` deliberately happens here and not on mount.
+    if (this._leadMedium() === 'chat') {
+      const session = this._ensureChatSession();
+      if (!session) {
+        this._surfaceError(
+          'Chat is not configured. Set `gateway-url` and `chat-key`.'
+        );
+        return;
+      }
+      this._activeMedium = 'chat';
+      this._openOverlay();
+      await session.ensureStarted();
+      this._refocusComposer();
+      return;
+    }
+
     if (!this.token) {
       this._surfaceError('Missing token. Configure the `token` attribute or mount option.');
       return;
@@ -699,6 +1418,14 @@ export class AddressWidget extends LitElement {
         : this._consent
           ? { metadata: baseMetadata }
           : {}),
+      // chat -> voice continuity. The handle is opaque and HMAC-signed; the
+      // agent verifies it with the gateway it already hosts and recovers the
+      // conversation id from inside it. Passing the id itself would defeat
+      // the point — the browser is never trusted with it, precisely so a
+      // publishable key plus a guessed id cannot continue someone else's
+      // conversation.
+      ...this._takeChatHandoffVars(),
+      ...this._mintHandoffNonceVars(),
       ...this._userVariables
     };
     const detail: BeforeDialDetail = {
@@ -714,6 +1441,87 @@ export class AddressWidget extends LitElement {
     );
     if (!allow) return;
 
+    await this._openOverlay();
+
+    // Start the call in the background so the overlay can show the
+    // connecting-poster state immediately.
+    void this._startCall(mergeVars);
+  }
+
+  /**
+   * Visitor picked voice. Re-enters `open()` with the picker dismissed, so
+   * the dial takes its ordinary path — consent gate, beforedial event and
+   * all — rather than a shortcut that would quietly skip them.
+   */
+  private async _chooseVoice(): Promise<void> {
+    this._picking = false;
+    this._mediumBypassGate = true;
+    this._activeMedium = 'voice';
+    this._chat.medium = 'voice';
+    this._overlayState = 'closed';
+    await this.open();
+  }
+
+  /** Visitor picked text. This is the first billable moment. */
+  private async _chooseChat(): Promise<void> {
+    const session = this._ensureChatSession();
+    if (!session) {
+      this._surfaceError('Chat is not configured. Set `gateway-url` and `chat-key`.');
+      return;
+    }
+    this._picking = false;
+    // Latched here too: a later switchToVoice re-enters open(), and being
+    // asked to choose again after already choosing would be nonsense.
+    this._mediumBypassGate = true;
+    this._activeMedium = 'chat';
+    this._rememberLastMedium('chat');
+    this._chat.medium = 'chat';
+    await session.ensureStarted();
+    this._refocusComposer();
+  }
+
+  /**
+   * Which medium this widget leads with. `both` defers to `default-mode`;
+   * a widget configured for chat but missing gateway credentials falls back
+   * to voice rather than opening onto a dead surface.
+   */
+  private _leadMedium(): 'voice' | 'chat' {
+    // An open chat conversation wins: reopening the overlay should drop you
+    // back into the conversation you were having, not offer a fresh start.
+    if (this._chatSession?.isActive) return 'chat';
+    if (this.mode === 'chat') return 'chat';
+    if (this.mode === 'both' && this.defaultMode === 'chat' && this._chatEnabled()) {
+      return 'chat';
+    }
+    return 'voice';
+  }
+
+  /**
+   * Whether opening should present a choice rather than committing.
+   *
+   * Only when both mediums are actually usable — asking someone to pick
+   * between two things when one of them cannot work is worse than just doing
+   * the one that can.
+   */
+  private _shouldAskMedium(): boolean {
+    if (this._mediumBypassGate) return false;
+    // Nothing to ask if a conversation is already under way — you chose when
+    // you started it, and asking again would imply the last one is gone.
+    if (this._chatSession?.isActive) return false;
+    return (
+      this.mode === 'both' &&
+      this.defaultMode === 'ask' &&
+      this._chatEnabled() &&
+      !!this.token &&
+      !!this.destination
+    );
+  }
+
+  /**
+   * The overlay entry transition, shared by both mediums so a chat-led open
+   * gets the same focus capture, scroll lock and origin animation a call does.
+   */
+  private async _openOverlay(): Promise<void> {
     this._previouslyFocused = (document.activeElement as HTMLElement) ?? null;
     this._previousBodyOverflow = lockBodyScroll();
     this._applyOriginFromLauncher();
@@ -723,15 +1531,15 @@ export class AddressWidget extends LitElement {
     requestAnimationFrame(() => {
       if (this._overlayState === 'entering') this._overlayState = 'open';
     });
-
-    // Start the call in the background so the overlay can show the
-    // connecting-poster state immediately.
-    void this._startCall(mergeVars);
   }
 
   /** Close the overlay and tear down any active call. */
   async close(): Promise<void> {
     if (this._overlayState === 'closed' || this._overlayState === 'exiting') return;
+    // Both gates are per-visit: a second open should ask again rather than
+    // silently reusing what the visitor picked last time.
+    this._picking = false;
+    this._mediumBypassGate = false;
     this._overlayState = 'exiting';
     const call = this._call;
     await this._teardown();
@@ -758,7 +1566,23 @@ export class AddressWidget extends LitElement {
       clearTimeout(this._bannerTimer);
       this._bannerTimer = undefined;
     }
-    this._chat.reset();
+    // Honour end-on-close before deciding whether the conversation survives.
+    if (this.chatEndOnClose) {
+      await this._chatSession?.handleClose(true);
+    }
+
+    // A live chat conversation KEEPS its transcript. Closing the overlay on a
+    // chat is hiding a window, not ending anything — the conversation is still
+    // open server-side, and `restore()` will not replay it on reopen because
+    // its one-shot guard has already fired. Resetting here left a blank panel
+    // attached to a conversation the agent still remembered, so you typed into
+    // an empty window and got answers about things you could no longer see.
+    //
+    // A voice call is the opposite: it is genuinely over, so its transcript
+    // goes.
+    if (!this._chatSession?.isActive) {
+      this._chat.reset();
+    }
     this._transcribeChat.reset();
     if (closedCallId) {
       clearCall(this.widgetId, closedCallId);
@@ -785,8 +1609,20 @@ export class AddressWidget extends LitElement {
     }
   }
 
-  /** End the call but keep the overlay open. */
+  /**
+   * End the whole conversation and close the overlay.
+   *
+   * Deliberately broader than "hang up the call": it also ends any chat
+   * session and forgets the last-active medium, so pressing End finishes
+   * the conversation rather than one leg of it, and a reload afterwards
+   * starts fresh instead of resuming something the user deliberately ended.
+   */
   async hangup(): Promise<void> {
+    // Pressing End ends the CONVERSATION, not just this leg — so a reload
+    // afterwards starts fresh rather than resuming something the user
+    // deliberately finished.
+    this._forgetLastMedium();
+    await this._chatSession?.end();
     if (this._call) {
       try {
         await this._call.hangup();
@@ -871,6 +1707,7 @@ export class AddressWidget extends LitElement {
         }
       });
 
+      this._rememberLastMedium('voice');
       this.dispatchEvent(
         new CustomEvent<CallEventDetail>('signalwire-address:call-joined', {
           detail: { call },
@@ -1041,10 +1878,15 @@ export class AddressWidget extends LitElement {
     if (call.networkIssues$) {
       call.networkIssues$.subscribe(refreshRing);
     }
-    // Close the overlay when the call ends.
+    // Close the overlay when the call ends — unless we are the ones ending
+    // it. A medium switch tears the call down deliberately and keeps the
+    // overlay open, so without this guard the hangup inside _teardown()
+    // reaches here as an ordinary disconnect and closes the widget out from
+    // under a chat that is about to start.
     if (call.status$) {
       call.status$.subscribe((status: string) => {
         if (status === 'disconnected' || status === 'destroyed') {
+          if (this._switchingMedium) return;
           void this.close();
         }
       });
@@ -1223,6 +2065,13 @@ export class AddressWidget extends LitElement {
   }
 
   private _handleUserEvent(payload: UserEventPayload): void {
+    // Built-in: chat_handoff moves this conversation to text in place.
+    if (payload.type === 'chat_handoff') {
+      void this._handleChatHandoff(payload);
+      // Falls through to the host callback / CustomEvent below, so a page
+      // can observe the switch even though we act on it ourselves.
+    }
+
     // Built-in: display_content opens the content drawer.
     if (payload.type === 'display_content') {
       const p = payload as unknown as DisplayContentPayload & Record<string, unknown>;
@@ -1726,7 +2575,12 @@ export class AddressWidget extends LitElement {
    * always stacks; mobile already stacks via media query as a fallback).
    */
   private _isStacked(): boolean {
-    return this.layout === 'stacked' || !this.video;
+    // Chat is always stacked: the sidebar shape exists to sit beside a video
+    // frame, and in text mode there isn't one. Left as a sidebar the
+    // transcript would hold its narrow column with dead space where the
+    // video used to be. Switching to voice brings the frame back and the
+    // transcript returns to the sidebar it was.
+    return this.layout === 'stacked' || !this.video || this._activeMedium === 'chat';
   }
 
   /**
@@ -1755,7 +2609,14 @@ export class AddressWidget extends LitElement {
       /** User's outgoing audio is enabled for this call. */
       audio: this.audio,
       /** User can see their own camera feed in a self-preview overlay. */
-      self_preview: this.video && this.showLocalVideo
+      self_preview: this.video && this.showLocalVideo,
+      /**
+       * This caller can be moved to text chat mid-call. Gates sigmond3's
+       * `switch_to_chat` tool: the agent only learns the tool exists when
+       * this is true, so a PSTN caller is never offered a browser it does
+       * not have. Requires a configured gateway, not just `mode`.
+       */
+      chat_handoff: this._chatEnabled()
     };
   }
 
@@ -1875,32 +2736,54 @@ export class AddressWidget extends LitElement {
           }
         }
       })}
-      ${renderVideoFrame({
-        call: this._call,
-        ring: this._ring,
-        audioRef: this._audioRef,
-        remoteVideoRef: this._remoteVideoRef,
-        localVideoRef: this._localVideoRef,
-        videoEnabled: this.video,
-        poster: this.poster,
-        showLocalVideo: this.showLocalVideo
-      })}
-      ${renderControls({
-        call: this._call,
-        client: this._client,
-        audioMuted: this._audioMuted,
-        videoMuted: this._videoMuted,
-        videoEnabled: this.video,
-        audioInputDevices: this._audioInputDevices,
-        videoInputDevices: this._videoInputDevices,
-        selectedAudioInputId: this._selectedAudioInputId,
-        selectedVideoInputId: this._selectedVideoInputId,
-        onToggleAudio: () => this._toggleAudio(),
-        onToggleVideo: () => this._toggleVideo(),
-        onHangup: () => this.hangup(),
-        onSelectAudioDevice: (d) => this._selectAudioDevice(d),
-        onSelectVideoDevice: (d) => this._selectVideoDevice(d)
-      })}
+      ${this._picking
+        ? renderMediumPicker({
+            voiceAvailable: !!this.token && !!this.destination,
+            chatAvailable: this._chatEnabled(),
+            onVoice: () => void this._chooseVoice(),
+            onChat: () => void this._chooseChat()
+          })
+        : html`
+      ${this._activeMedium === 'voice'
+        ? // Chat has no media, so it must not wear a call's surface. Left
+          // unconditional this rendered the pre-call poster and its
+          // "Connecting call" state behind a text conversation that was
+          // already underway — describing something that was never going to
+          // happen.
+          renderVideoFrame({
+            call: this._call,
+            ring: this._ring,
+            audioRef: this._audioRef,
+            remoteVideoRef: this._remoteVideoRef,
+            localVideoRef: this._localVideoRef,
+            videoEnabled: this.video,
+            poster: this.poster,
+            showLocalVideo: this.showLocalVideo
+          })
+        : nothing}
+      ${this._activeMedium === 'voice'
+        ? renderControls({
+            call: this._call,
+            client: this._client,
+            audioMuted: this._audioMuted,
+            videoMuted: this._videoMuted,
+            videoEnabled: this.video,
+            audioInputDevices: this._audioInputDevices,
+            videoInputDevices: this._videoInputDevices,
+            selectedAudioInputId: this._selectedAudioInputId,
+            selectedVideoInputId: this._selectedVideoInputId,
+            onToggleAudio: () => this._toggleAudio(),
+            onToggleVideo: () => this._toggleVideo(),
+            onHangup: () => this.hangup(),
+            onSelectAudioDevice: (d) => this._selectAudioDevice(d),
+            onSelectVideoDevice: (d) => this._selectVideoDevice(d),
+            // Undefined rather than a no-op when unavailable, so the button
+            // is absent instead of present-but-dead.
+            onSwitchToChat: this._canSwitchToChat()
+              ? () => void this.switchToChat()
+              : undefined
+          })
+        : nothing}
       <div class="chat-region" data-stacked=${String(this._isStacked())}>
         ${hasChat
           ? renderTranscript({
@@ -1908,6 +2791,10 @@ export class AddressWidget extends LitElement {
               visible: true,
               stacked: this._isStacked(),
               scrollRef: this._transcriptRef,
+              avatarUrl: this._avatarBroken ? null : this.avatarUrl,
+              onAvatarError: () => {
+                this._avatarBroken = true;
+              },
               openContentId: this._openContentId,
               onContentClick: (id) => {
                 this._openContentId = id;
@@ -1925,6 +2812,32 @@ export class AddressWidget extends LitElement {
             })
           : nothing}
       </div>
+      ${this._activeMedium === 'chat'
+        ? renderComposer({
+            placeholder: this.chatPlaceholder,
+            busy: this._chatBusy,
+            onSend: (text) => this._sendChatMessage(text),
+            inputRef: this._composerRef,
+            // Absent unless voice is genuinely available and this widget is
+            // allowed to use it — mode="chat" has nothing to escalate to.
+            onSwitchToVoice:
+              this.mode === 'both' && !!this.token && !!this.destination
+                ? () => void this.switchToVoice()
+                : undefined,
+            onEnd: () => void this._endChat()
+          })
+        : this._typeToTalkAvailable()
+          ? // Alongside the controls dock, not instead of it — the call is
+            // still a call, and taking the mute and hangup buttons away
+            // because someone typed once would be hostile.
+            renderComposer({
+              placeholder: this.typeToTalkPlaceholder,
+              busy: false,
+              onSend: (text) => void this._sendTypedMessage(text),
+              inputRef: this._composerRef
+            })
+          : nothing}
+        `}
       <span hidden data-chat-version=${this._chatVersion}></span>
     `;
   }
@@ -1942,6 +2855,8 @@ export class AddressWidget extends LitElement {
             close: () => this.close(),
             state: overlayState,
             stacked: this._isStacked(),
+            presentation: this.presentation,
+            position: this.position,
             ariaLabel: `Call ${this.destination || 'SignalWire address'}`,
             body: this._renderBody()
           })

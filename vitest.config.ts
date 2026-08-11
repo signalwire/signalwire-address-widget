@@ -10,6 +10,11 @@ export default defineConfig({
       '@': resolve(__dirname, 'src')
     }
   },
+  // Mirrors vite.config.ts. Without it any test that reaches _buildMetadata
+  // dies on an undefined global rather than on anything it meant to assert.
+  define: {
+    __WIDGET_VERSION__: JSON.stringify('0.0.0-test')
+  },
   test: {
     environment: 'happy-dom',
     globals: true,

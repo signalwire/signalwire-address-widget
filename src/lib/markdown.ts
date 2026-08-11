@@ -8,10 +8,35 @@
 
 import { marked } from 'marked';
 import { sanitizeHtml } from './sanitize';
+import { highlightCode } from './highlight';
 
 marked.setOptions({
   gfm: true,
   breaks: false
+});
+
+/**
+ * Syntax-highlight fenced code blocks.
+ *
+ * Without this, ```` ```python ```` rendered as an unstyled `<pre>` — markdown
+ * highlighting only existed on the drawer's `format: "code"` path, so a code
+ * block arriving inside a markdown message got none of it. Chat replies are
+ * markdown, so that was most of them.
+ *
+ * The output is `<span class="token …">`, and both `span` and `class` are on
+ * the sanitizer's allowlist, so the highlighting survives sanitization.
+ */
+marked.use({
+  renderer: {
+    code({ text, lang }: { text: string; lang?: string }): string {
+      const language = (lang || '').trim().split(/\s+/)[0];
+      const body = highlightCode(text, language || undefined);
+      const label = language
+        ? `<span class="code-block-lang">${language}</span>`
+        : '';
+      return `<div class="code-block" data-language="${language || 'text'}">${label}<pre><code>${body}</code></pre></div>`;
+    }
+  }
 });
 
 /**

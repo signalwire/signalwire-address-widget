@@ -24,6 +24,16 @@ export interface OverlayContext {
   /** When set to 'exiting', plays the reverse animation before unmount. */
   state: 'entering' | 'open' | 'exiting';
   /**
+   * `immersive` (default) takes the whole viewport — right for a call.
+   * `panel` is a corner window sized by --sw-address-panel-width/height,
+   * for a text embed on a page that should not be taken over. Collapses to
+   * full-screen under the mobile breakpoint either way: a 380px window on a
+   * phone is not a window.
+   */
+  presentation?: 'immersive' | 'panel';
+  /** Corner anchor for `panel`. Ignored when immersive. */
+  position?: 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
+  /**
    * When true, the overlay body uses a vertical stack (video-or-poster at
    * top, transcript below) regardless of screen size. Mobile always
    * stacks; this flag lets audio-only mode stack on desktop too.
@@ -32,6 +42,50 @@ export interface OverlayContext {
 }
 
 export const overlayStyles = css`
+  /* Panel presentation: a corner window instead of a viewport takeover.
+     Only the geometry changes — the dialog is still in the top layer, still
+     modal, still focus-trapped, so behaviour is identical to immersive. */
+  .overlay[data-presentation='panel'] {
+    width: var(--sw-address-panel-width, 400px);
+    height: var(--sw-address-panel-height, 640px);
+    max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 32px);
+    inset: auto;
+    border-radius: var(--sw-address-radius);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+    overflow: hidden;
+  }
+  .overlay[data-presentation='panel'][data-position='bottom-right'] {
+    bottom: 16px;
+    right: 16px;
+  }
+  .overlay[data-presentation='panel'][data-position='bottom-left'] {
+    bottom: 16px;
+    left: 16px;
+  }
+  .overlay[data-presentation='panel'][data-position='top-right'] {
+    top: 16px;
+    right: 16px;
+  }
+  .overlay[data-presentation='panel'][data-position='top-left'] {
+    top: 16px;
+    left: 16px;
+  }
+
+  /* Phone: a corner window is not a window. Full-screen regardless of
+     presentation, matching what the reference chat widget did under 640px. */
+  @media (max-width: 640px) {
+    .overlay[data-presentation='panel'] {
+      width: 100vw;
+      height: 100vh;
+      height: 100dvh;
+      max-width: none;
+      max-height: none;
+      inset: 0;
+      border-radius: 0;
+    }
+  }
+
   /* Overlay root is a native <dialog> so showModal() puts it on the browser's
      top layer. Top-layer elements escape every containing block + stacking
      context on the host page by spec: ancestor transform / filter /
@@ -249,6 +303,8 @@ export function renderOverlay(ctx: OverlayContext): TemplateResult {
       part="overlay"
       class="overlay"
       data-state=${ctx.state}
+      data-presentation=${ctx.presentation ?? 'immersive'}
+      data-position=${ctx.position ?? 'bottom-right'}
       aria-label=${ctx.ariaLabel ?? 'Call in progress'}
     >
       <div

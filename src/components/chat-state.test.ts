@@ -40,12 +40,16 @@ describe('ChatState', () => {
     state.onUserComplete('hello world.', false);
     hist = state.getHistory();
     expect(hist).toHaveLength(1);
-    expect(hist[0]).toEqual({
+    // Committed bubbles carry `medium` and `ts`; partials do not, since a
+    // timestamp on something still being said is meaningless.
+    expect(hist[0]).toMatchObject({
       kind: 'bubble',
       speaker: 'user',
       text: 'hello world.',
-      state: 'complete'
+      state: 'complete',
+      medium: 'voice'
     });
+    expect((hist[0] as { ts?: number }).ts).toBeTypeOf('number');
     expect(state.lastSpoken).toBe('user');
   });
 
@@ -111,7 +115,7 @@ describe('ChatState', () => {
     state.onUserComplete('hi there', false);
     const hist = state.getHistory();
     expect(hist).toHaveLength(1);
-    expect(hist[0]).toEqual({
+    expect(hist[0]).toMatchObject({
       kind: 'bubble',
       speaker: 'user',
       text: 'hi there',
@@ -123,7 +127,7 @@ describe('ChatState', () => {
     state.onAiComplete('Hello!', false);
     const hist = state.getHistory();
     expect(hist).toHaveLength(1);
-    expect(hist[0]).toEqual({
+    expect(hist[0]).toMatchObject({
       kind: 'bubble',
       speaker: 'ai',
       text: 'Hello!',
@@ -190,6 +194,65 @@ describe('ChatState', () => {
       "user:complete:what's the time?",
       "ai:complete:It's 3 PM."
     ]);
+  });
+
+  it('tags committed bubbles with the active medium', () => {
+    state.onUserComplete('by voice', false);
+    state.medium = 'chat';
+    state.onUserComplete('by text', false);
+
+    const bubbles = state
+      .getHistory()
+      .filter((e): e is Extract<typeof e, { kind: 'bubble' }> => e.kind === 'bubble');
+    expect(bubbles.map((b) => b.medium)).toEqual(['voice', 'chat']);
+  });
+
+  it('does not tag partials with a timestamp', () => {
+    state.onUserPartial('still talking', false);
+    const partial = state.getHistory()[0] as { ts?: number };
+    expect(partial.ts).toBeUndefined();
+  });
+
+  it('appends a notice without disturbing turn order', () => {
+    state.onUserComplete('hello', false);
+    state.pushNotice('This conversation timed out.');
+    const hist = state.getHistory();
+    expect(hist).toHaveLength(2);
+    expect(hist[1]).toMatchObject({ kind: 'notice', text: 'This conversation timed out.' });
+    // A notice is not a turn — it must not claim the floor.
+    expect(state.lastSpoken).toBe('user');
+  });
+
+  it('ignores an empty notice', () => {
+    state.pushNotice('');
+    expect(state.getHistory()).toEqual([]);
+  });
+
+  it('replaceWithTranscript replaces rather than appends, and marks chat', () => {
+    state.onUserComplete('from a previous life', false);
+    state.replaceWithTranscript([
+      { role: 'assistant', text: 'Hi there', ts: 1000 },
+      { role: 'user', text: 'hello', ts: 2000 },
+      { role: 'assistant', text: '   ', ts: 3000 } // blank turns dropped
+    ]);
+    const hist = state.getHistory();
+    expect(hist).toHaveLength(2);
+    expect(hist.map((e) => (e.kind === 'bubble' ? e.text : ''))).toEqual([
+      'Hi there',
+      'hello'
+    ]);
+    expect(hist.every((e) => e.kind === 'bubble' && e.medium === 'chat')).toBe(true);
+    // Server timestamps are preserved, not restamped with the reload's clock.
+    expect((hist[0] as { ts?: number }).ts).toBe(1000);
+  });
+
+  it('loadSnapshot keeps notices alongside bubbles and chips', () => {
+    state.loadSnapshot([
+      { kind: 'bubble', speaker: 'user', text: 'hi', state: 'complete' },
+      { kind: 'notice', text: 'timed out', ts: 1 },
+      { kind: 'bubble', speaker: 'ai', text: '', state: 'complete' } // dropped
+    ]);
+    expect(state.getHistory().map((e) => e.kind)).toEqual(['bubble', 'notice']);
   });
 
   it('reset() clears all state', () => {

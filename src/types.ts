@@ -18,6 +18,46 @@ export type Theme = 'dark' | 'light';
 export type Layout = 'auto' | 'stacked';
 
 /**
+ * Which transports the widget offers.
+ *
+ *   - `voice` (default): the video/audio call this widget started life as.
+ *   - `chat`: text only, over a `ChatGateway`. No SAT, no media.
+ *   - `both`: offers each, and allows switching between them mid-conversation
+ *     without losing context. `default-mode` picks which one opens first.
+ *
+ * `chat` and `both` need `gateway-url` and `chat-key`; `voice` and `both`
+ * need `token`.
+ */
+export type Mode = 'voice' | 'chat' | 'both';
+
+/**
+ * How the overlay presents itself.
+ *
+ *   - `immersive` (default, both mediums): full-viewport takeover. What the
+ *     widget has always done for calls, and the default for chat too, so a
+ *     medium switch is a change of content rather than a change of surface —
+ *     the video area collapses, the composer appears, the transcript stays
+ *     exactly where it was.
+ *   - `panel`: a corner window sized by `--sw-address-panel-width` /
+ *     `--sw-address-panel-height`, anchored per `position`. The familiar
+ *     support-chat shape, for text-only embeds on a page that shouldn't be
+ *     taken over. Collapses to full-screen under the mobile breakpoint
+ *     regardless, because a 380px window on a phone is not a window.
+ *
+ * Panel sizing tokens are inert in `immersive` — deliberately, and unlike the
+ * standalone chat widget where they were inert *everywhere* because three
+ * media queries of equal specificity overrode them at every viewport width.
+ */
+export type Presentation = 'immersive' | 'panel';
+
+/** Corner anchoring for `presentation="panel"`. Ignored when immersive. */
+export type PanelPosition =
+  | 'bottom-right'
+  | 'bottom-left'
+  | 'top-right'
+  | 'top-left';
+
+/**
  * Payload for a `display_content` user_event sent by the backend agent.
  * Documented publicly in EVENTS.md.
  */
@@ -35,12 +75,90 @@ export interface DisplayContentPayload {
  * element (via attributes of the same names in kebab-case).
  */
 export interface WidgetOptions {
-  /** SignalWire Subscriber Access Token (SAT). Required. */
-  token: string;
-  /** Address to dial, e.g. `/public/my-agent` or a full fabric address. Required. */
-  destination: string;
+  /**
+   * SignalWire Subscriber Access Token (SAT).
+   *
+   * Required for voice — i.e. `mode: 'voice'` (the default) or
+   * `mode: 'both'`. Optional in the type rather than required because
+   * `mode: 'chat'` never dials and has no use for one; a chat-only
+   * consumer should not have to invent a token to satisfy the compiler.
+   */
+  token?: string;
+  /**
+   * Address to dial, e.g. `/public/my-agent` or a full fabric address.
+   * Required for voice, unused in chat-only mode. See `token`.
+   */
+  destination?: string;
   /** Launcher label text when the attached div has no content of its own. */
   label?: string;
+  /**
+   * Which transports this widget offers. Default `voice`.
+   *
+   * `chat` and `both` additionally require `gatewayUrl` and `chatKey` —
+   * without both, the widget stays voice-only rather than half-working.
+   */
+  mode?: Mode;
+  /**
+   * Which transport opens first when `mode: 'both'`. Ignored otherwise.
+   * `ask` presents the medium picker and commits to nothing (and spends
+   * nothing) until the visitor chooses. Default `voice`.
+   */
+  defaultMode?: 'voice' | 'chat' | 'ask';
+  /** Overlay presentation — full-viewport or corner panel. Default `immersive`. */
+  presentation?: Presentation;
+  /** Corner anchoring when `presentation: 'panel'`. Ignored when immersive. */
+  position?: PanelPosition;
+  /**
+   * URL of a `ChatGateway` mounted by the SignalWire Python SDK.
+   * Required for chat. Also required — on its own, without `chatKey` —
+   * by `typeToTalk`, which authorizes on the per-call nonce instead.
+   */
+  gatewayUrl?: string;
+  /**
+   * Publishable key for the chat gateway, sent as `Authorization: Bearer`.
+   * A public credential by design: the gateway holds the real one and pins
+   * `config_url` server-side, so a leaked key still reaches only the agent
+   * it was issued for.
+   */
+  chatKey?: string;
+  /** Image shown beside each agent reply in chat. Scaled to fit, not cropped. */
+  avatarUrl?: string;
+  /** Composer placeholder in chat mode. */
+  chatPlaceholder?: string;
+  /**
+   * Let the caller type during a VOICE call, delivered via the gateway's
+   * `/say` route. Default false. Needs `gatewayUrl`, but deliberately not
+   * `chatKey`.
+   */
+  typeToTalk?: boolean;
+  /** Composer placeholder during a voice call when `typeToTalk` is on. */
+  typeToTalkPlaceholder?: string;
+  /** Resume a chat conversation across a page reload. Default true. */
+  chatPersistence?: boolean;
+  /**
+   * Reopen the widget automatically when a reload resumes a live
+   * conversation. Fires once per conversation, so a close afterwards
+   * sticks. Default true.
+   */
+  chatAutoOpen?: boolean;
+  /**
+   * sessionStorage key for the chat handle. Change only to run two chat
+   * widgets on one origin.
+   */
+  chatStorageKey?: string;
+  /** Ignore any stored handle and always open a fresh conversation. Default false. */
+  chatAlwaysNew?: boolean;
+  /**
+   * End the conversation server-side when the overlay closes, instead of
+   * leaving it resumable. Default false.
+   */
+  chatEndOnClose?: boolean;
+  /**
+   * Idle seconds after which the chat service ends the conversation.
+   * Mirror whatever the gateway is configured with — the widget uses it to
+   * show an expiry notice and stop offering resume. Default 3600.
+   */
+  chatTimeoutSeconds?: number;
   /** Enable outgoing video. Default true. */
   video?: boolean;
   /** Enable outgoing audio. Default true. */
@@ -157,13 +275,14 @@ export interface WidgetOptions {
    * language and lets the user opt out of video. Choice is persisted
    * in localStorage (origin-wide) so they're not re-prompted on
    * subsequent dials. A small "Recording" badge stays visible during
-   * the call. Default false.
+   * the call. Default true — pass false only if the host page obtains
+   * consent itself.
    */
   consentRequired?: boolean;
   /**
    * Schema / policy version tag for the consent record. Bump when
    * copy or scope materially changes so old consent invalidates and
-   * users see the new prompt. Defaults to 1.
+   * users see the new prompt. Defaults to 2.
    */
   consentVersion?: number;
   /**

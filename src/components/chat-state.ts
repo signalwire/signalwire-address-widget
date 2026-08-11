@@ -23,12 +23,42 @@
 export type Speaker = 'ai' | 'user';
 export type EntryState = 'partial' | 'complete';
 
-/** A spoken-dialogue bubble. */
+/**
+ * Which transport produced a turn. One transcript holds both after a medium
+ * switch, so each entry has to remember where it came from: voice turns are
+ * speech and render as plain text, chat turns are typed or generated and
+ * render as markdown. Rendering speech as markdown would let a stray asterisk
+ * in a transcription silently italicise half a sentence.
+ */
+export type Medium = 'voice' | 'chat';
+
+/** A dialogue bubble. */
 export interface BubbleEntry {
   kind: 'bubble';
   speaker: Speaker;
   text: string;
   state: EntryState;
+  /** Defaults to `voice` when absent, for snapshots written before this existed. */
+  medium?: Medium;
+  /**
+   * Epoch ms, set when the bubble commits. Partials have none — they are in
+   * flight, and a timestamp on something still being said is meaningless.
+   */
+  ts?: number;
+}
+
+/**
+ * A status line about the conversation rather than a turn in it — currently
+ * only the chat idle-timeout notice.
+ *
+ * Its own kind rather than a styled-down bubble, so it cannot inherit bubble
+ * padding, the avatar column, or a speaker alignment. It is centred, has no
+ * timestamp, and renders as plain text.
+ */
+export interface NoticeEntry {
+  kind: 'notice';
+  text: string;
+  ts: number;
 }
 
 /**
@@ -66,13 +96,20 @@ export interface InsightEntry {
   ts: number;
 }
 
-export type ChatEntry = BubbleEntry | ContentChipEntry | InsightEntry;
+export type ChatEntry = BubbleEntry | ContentChipEntry | InsightEntry | NoticeEntry;
 
 export class ChatState {
   private _entries: ChatEntry[] = [];
   private _aiPartial: BubbleEntry | null = null;
   private _userPartial: BubbleEntry | null = null;
   private _lastSpoken: Speaker | null = null;
+
+  /**
+   * Which transport is currently feeding this transcript. Every committed
+   * bubble is tagged with it, so a transcript that spans a medium switch can
+   * render each half correctly. The widget flips this when it swaps.
+   */
+  public medium: Medium = 'voice';
 
   /** Invoked after any state change. Overridable by consumers. */
   public onUpdate: () => void = () => {
@@ -136,14 +173,18 @@ export class ChatState {
       }
       return;
     }
-    if (this._userPartial) {
-      this._entries.push({ kind: 'bubble', speaker: 'user', text, state: 'complete' });
-      this._userPartial = null;
-    } else {
-      // Some races: speech_detect without a preceding partial. Still record
-      // it so the transcript is complete.
-      this._entries.push({ kind: 'bubble', speaker: 'user', text, state: 'complete' });
-    }
+    // Both branches commit the same entry; the partial is cleared when there
+    // was one. A speech_detect with no preceding partial is a race, not an
+    // error, and is still recorded so the transcript stays complete.
+    this._entries.push({
+      kind: 'bubble',
+      speaker: 'user',
+      text,
+      state: 'complete',
+      medium: this.medium,
+      ts: Date.now()
+    });
+    this._userPartial = null;
     this._lastSpoken = 'user';
     this.onUpdate();
   }
@@ -168,10 +209,24 @@ export class ChatState {
       // Prefer the server's final text if it provided one; otherwise keep
       // the accumulated chunks.
       const finalText = text.length > 0 ? text : this._aiPartial.text;
-      this._entries.push({ kind: 'bubble', speaker: 'ai', text: finalText, state: 'complete' });
+      this._entries.push({
+        kind: 'bubble',
+        speaker: 'ai',
+        text: finalText,
+        state: 'complete',
+        medium: this.medium,
+        ts: Date.now()
+      });
       this._aiPartial = null;
     } else if (text.length > 0) {
-      this._entries.push({ kind: 'bubble', speaker: 'ai', text, state: 'complete' });
+      this._entries.push({
+        kind: 'bubble',
+        speaker: 'ai',
+        text,
+        state: 'complete',
+        medium: this.medium,
+        ts: Date.now()
+      });
     }
     // If the completion was due to the user barging the AI, the turn
     // conceptually transferred to the user; otherwise it stays with AI.
@@ -200,6 +255,45 @@ export class ChatState {
   }
 
   /**
+   * Append a status line about the conversation (the chat idle-timeout
+   * notice). Not a turn, so it does not touch `_lastSpoken` — a notice
+   * arriving mid-exchange must not reorder the live partials around it.
+   */
+  public pushNotice(text: string): void {
+    if (!text) return;
+    this._entries.push({ kind: 'notice', text, ts: Date.now() });
+    this.onUpdate();
+  }
+
+  /**
+   * Replace the transcript with a server-side one.
+   *
+   * Used when a stored chat handle replays an existing conversation: the
+   * server's copy is authoritative and complete, so this replaces rather than
+   * appends. Content chips and insights are dropped along with everything
+   * else — they were delivered to a previous page load and their payloads
+   * live in that load's memory.
+   */
+  public replaceWithTranscript(
+    messages: Array<{ role: string; text: string; ts: number }>
+  ): void {
+    this._entries = messages
+      .filter((m) => typeof m.text === 'string' && m.text.trim())
+      .map((m) => ({
+        kind: 'bubble' as const,
+        speaker: m.role === 'user' ? ('user' as const) : ('ai' as const),
+        text: m.text,
+        state: 'complete' as const,
+        medium: 'chat' as const,
+        ts: m.ts
+      }));
+    this._aiPartial = null;
+    this._userPartial = null;
+    this._lastSpoken = null;
+    this.onUpdate();
+  }
+
+  /**
    * Bulk-replace the completed entries with a snapshot. Used on reattach
    * to rehydrate from sessionStorage before any live subscriptions fire.
    * Partials are cleared — they're always in-flight, never persisted.
@@ -212,7 +306,7 @@ export class ChatState {
    */
   public loadSnapshot(entries: ChatEntry[]): void {
     this._entries = entries.filter((e) => {
-      if (e.kind === 'content' || e.kind === 'insight') return true;
+      if (e.kind === 'content' || e.kind === 'insight' || e.kind === 'notice') return true;
       if (e.kind !== 'bubble' || e.state !== 'complete') return false;
       if (typeof e.text !== 'string') return false;
       const trimmed = e.text.trim();

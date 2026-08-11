@@ -64,11 +64,16 @@ export function mount(target: Target, options: WidgetOptions): AddressWidget {
   const host = resolveTarget(target);
   const widget = document.createElement('signalwire-address') as AddressWidget;
 
-  // Apply options. Attributes used where a reflecting property exists
-  // (so devtools shows them in the DOM); direct property assignment used
-  // for values that can't round-trip through attributes (token, JSON).
-  widget.token = options.token;
-  widget.destination = options.destination;
+  // Apply options. Every field is assigned as a property; Lit reflects the
+  // ones declared `reflect: true` back out to attributes, so devtools still
+  // shows them in the DOM. Each is guarded on `!== undefined` so omitting a
+  // field leaves the element's own default in place rather than clobbering
+  // it with undefined.
+  //
+  // Voice credentials are guarded like everything else because they are
+  // optional in `WidgetOptions`: a `mode: 'chat'` consumer has no token.
+  if (options.token !== undefined) widget.token = options.token;
+  if (options.destination !== undefined) widget.destination = options.destination;
   if (options.label !== undefined) widget.label = options.label;
   if (options.theme !== undefined) widget.theme = options.theme;
   if (options.video !== undefined) widget.video = options.video;
@@ -83,6 +88,33 @@ export function mount(target: Target, options: WidgetOptions): AddressWidget {
   if (options.autoIdentify !== undefined) widget.autoIdentify = options.autoIdentify;
   if (options.nodeId !== undefined) widget.nodeId = options.nodeId;
   if (options.debug !== undefined) widget.debug = options.debug;
+  if (options.widgetId !== undefined) widget.widgetId = options.widgetId;
+  if (options.autoReattach !== undefined) widget.autoReattach = options.autoReattach;
+
+  // Mode / presentation.
+  if (options.mode !== undefined) widget.mode = options.mode;
+  if (options.defaultMode !== undefined) widget.defaultMode = options.defaultMode;
+  if (options.presentation !== undefined) widget.presentation = options.presentation;
+  if (options.position !== undefined) widget.position = options.position;
+
+  // Chat transport. Inert unless `mode` includes chat AND both credentials
+  // land — same rule the element enforces internally.
+  if (options.gatewayUrl !== undefined) widget.gatewayUrl = options.gatewayUrl;
+  if (options.chatKey !== undefined) widget.chatKey = options.chatKey;
+  if (options.avatarUrl !== undefined) widget.avatarUrl = options.avatarUrl;
+  if (options.chatPlaceholder !== undefined) widget.chatPlaceholder = options.chatPlaceholder;
+  if (options.typeToTalk !== undefined) widget.typeToTalk = options.typeToTalk;
+  if (options.typeToTalkPlaceholder !== undefined) {
+    widget.typeToTalkPlaceholder = options.typeToTalkPlaceholder;
+  }
+  if (options.chatPersistence !== undefined) widget.chatPersistence = options.chatPersistence;
+  if (options.chatAutoOpen !== undefined) widget.chatAutoOpen = options.chatAutoOpen;
+  if (options.chatStorageKey !== undefined) widget.chatStorageKey = options.chatStorageKey;
+  if (options.chatAlwaysNew !== undefined) widget.chatAlwaysNew = options.chatAlwaysNew;
+  if (options.chatEndOnClose !== undefined) widget.chatEndOnClose = options.chatEndOnClose;
+  if (options.chatTimeoutSeconds !== undefined) {
+    widget.chatTimeoutSeconds = options.chatTimeoutSeconds;
+  }
   if (options.userVariables !== undefined) {
     widget.userVariablesAttr = options.userVariables;
   }
