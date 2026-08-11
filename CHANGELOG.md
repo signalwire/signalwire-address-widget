@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **`video="false"` / `audio="false"` now actually turn those off.** Both
+  properties used Lit's built-in Boolean converter, where any attribute
+  presence resolves to `true` — so the audio-only mode documented since 0.1.0
+  silently kept the camera on for anyone configuring it declaratively. They now
+  use the same `boolDefaultTrue` converter every other default-true boolean on
+  the element already used, accepting `"false"` and `"0"` as opt-outs while
+  leaving bare presence (`video`) and `video=""` meaning on. Consumers who set
+  `video: false` programmatically were never affected.
+- **`mount()` accepts every option again.** `WidgetOptions` and `mount()` had
+  drifted behind the element: the entire chat surface (`mode`, `gatewayUrl`,
+  `chatKey`, `defaultMode`, `presentation`, `position`, `typeToTalk`, and the
+  `chat*` family) plus `widgetId` and `autoReattach` were declared on
+  `<signalwire-address>` but neither typed nor forwarded, so a programmatic
+  consumer could only reach them by assigning properties after mounting.
+- `token` and `destination` are now optional in `WidgetOptions`. They are still
+  required for voice, but `mode: 'chat'` never dials, and requiring them made a
+  chat-only `mount()` call a type error.
+
+### Documentation
+
+- README rewritten as a comprehensive usage guide: all three modes, the full
+  option reference, medium switching, type-to-talk, persistence and reattach,
+  consent, troubleshooting. Twenty-one previously undocumented options added,
+  along with the complete CSS custom property and shadow part lists.
+- EVENTS.md gained the agent-side contract for medium switching (the
+  `handoff_nonce` / `chat_handle` userVariables, the three gateway routes, and
+  the `chat_handoff` event) and the `capabilities` / `metadata` payloads sent
+  at dial time.
+- Corrected stale JSDoc: `consentRequired` defaults to `true` (not `false`),
+  `consentVersion` to `2` (not `1`), and `hangup()` closes the overlay and ends
+  any chat session rather than "keeping the overlay open".
+
 ## 0.1.0 — initial release
 
 First scaffold of `@signalwire/address-widget`. Embeddable call widget that

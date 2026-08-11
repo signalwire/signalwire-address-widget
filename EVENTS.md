@@ -107,6 +107,68 @@ SignalWireAddressWidget.mount('#target', {
 
 Use this to drive host-page UI from the agent side without modifying the widget.
 
+## What the widget tells you at dial time
+
+Unless the host page sets `auto-identify="false"`, every dial carries two nested objects in userVariables (`result.user_data` in SWML). Read them rather than guessing what the caller can see.
+
+`capabilities` is the contract — what this client can actually render:
+
+```json
+{
+  "widget": "signalwire-address",
+  "version": "<widget version>",
+  "display_content": { "formats": ["text", "markdown", "code", "html"], "persistent": true, "copyable": true },
+  "transcript": true,
+  "video": true,
+  "audio": true,
+  "self_preview": true,
+  "chat_handoff": true
+}
+```
+
+Two fields are worth branching on:
+
+- **`transcript`** — the caller can *see* your words, not just hear them. Markdown and code pushes are worth sending; on a PSTN call they would be wasted.
+- **`chat_handoff`** — this caller can be moved to text. Gate your `switch_to_chat` tool on it so the model never offers a browser the caller doesn't have.
+
+`metadata` carries session context in three buckets (`page`, `client`, `widget`) — URL, referrer, platform, locale, timezone, viewport, accessibility preferences, widget version and theme. When the host page collects recording consent, `metadata.consent` and a top-level `metadata.no_training` flag ride along with it. Full shape in [README.md](./README.md#auto-populated-payloads).
+
+## Medium switching (voice ↔ text)
+
+A widget configured for both mediums can move a conversation between them without losing context. The agent side owns the continuity; the widget deliberately never learns its own conversation id.
+
+Continuity rides on **opaque, HMAC-signed handles** minted server-side. The browser holds one and hands it back but never parses it, so a stolen publishable key plus a guessed conversation id cannot resume someone else's conversation.
+
+### What the widget sends you
+
+| userVariable | When | Meaning |
+|---|---|---|
+| `handoff_nonce` | every dial, when chat is configured | Single-use random id for *this call*. Store it against the call. It is how the browser later proves which call it is on without naming a conversation. |
+| `chat_handle` | text → voice only | Handle of the chat conversation being continued. Verify it with your own gateway and recover the conversation to seed the call. |
+
+### Routes your gateway must expose
+
+| Route | Body | Returns | Called when |
+|---|---|---|---|
+| `POST /handoff` | `{ nonce }` | `{ handle }` | Caller pressed **Switch to text**. Redeem the nonce (single-use), end the call server-side so its post-prompt fires immediately, mint a chat handle for the same conversation. |
+| `POST /escalate` | `{ handle }` | any 2xx | Caller pressed **Start a call** from chat. End the chat leg and write its record *before returning* — the widget blocks on this before dialing, so the new call's SWML fetch doesn't race a summary that is still seconds away. |
+| `POST /say` | `{ nonce, text }` | any 2xx | Caller typed during a voice call (`type-to-talk`). Inject the text into the live conversation via `client.calling.ai_message`. Authorizes on the nonce, not the publishable key. |
+
+### `chat_handoff` — model-initiated voice → text
+
+```python
+result.swml_user_event({
+    "type": "chat_handoff",
+    "handle": "<signed handle from your gateway>"
+})
+```
+
+**Do not hang up when you emit this.** A server-side hangup can beat the event to the browser, and then the handoff is lost with no way to recover it. Mint and announce; the widget owns the teardown ordering — it receives the handle, tears the call down itself, then adopts the handle.
+
+The widget does **not** replay the transcript to you. The turns already on the caller's screen stay there for visual continuity, but the model's context arrives server-side only — a browser-supplied conversation history would be a prompt-injection vector, since a malicious host page could hand you a fabricated exchange.
+
+If a `chat_handoff` reaches a widget with no chat configured, it warns in the console and shows the caller a "Text chat is not available here" banner rather than silently dropping the call.
+
 ## Event ordering and barge handling
 
 The chat state machine handles partial-reconciliation across both speakers, including barges:
