@@ -1,6 +1,6 @@
 {
   "name": "@signalwire/address-widget",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Embeddable SignalWire call widget. Turn any div into a launcher that opens a full-viewport video/audio call to a SignalWire address.",
   "publishConfig": {
     "access": "public"
