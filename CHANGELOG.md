@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.2.0
+
+Minor rather than patch: this adds public API, not only fixes.
+
+### Added
+
+- **Text chat transport** with live voice/chat switching — `mode`,
+  `default-mode`, `gateway-url`, `chat-key`, `presentation`, `position`,
+  `type-to-talk` and the `chat-*` family. Off by default: `mode` is `voice`,
+  and chat additionally requires BOTH `gateway-url` and `chat-key`, so an
+  existing `token` + `destination` embed reaches none of it.
+- **`mic-check`** (default true) — a live level meter on the pre-call setup
+  screen. A microphone that is present but silent satisfies `getUserMedia`
+  completely, so the only way to reveal one is to show the samples. Set
+  `mic-check="false"` to keep the permission prompt at dial time instead of
+  the setup screen.
+- Mid-call dead-microphone warning after five seconds of silence while
+  unmuted.
+
+### Fixed
+
+- **A remembered device is now applied to the DeviceController**, not just
+  used to shape the track. Previously `selectedAudioInputDevice$` stayed null
+  and the picker highlighted "default" while a different microphone was live.
+- **Mid-call device changes persist**, so a switch away from a bad device
+  survives to the next call instead of being silently reverted.
+- The dial constraint is a preference rather than `{ exact: … }`. An unplugged
+  headset no longer fails the whole call with `OverconstrainedError`; a stored
+  id that no longer resolves is dropped rather than retried forever.
+- The device chevrons are no longer disabled when the list is empty — it is
+  usually empty only because enumeration ran before permission was granted,
+  and disabling it there strands the caller with no way to reach the picker.
+
 ## Unreleased
 
 ### Fixed
