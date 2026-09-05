@@ -50,6 +50,7 @@ import { mediumPickerStyles, renderMediumPicker } from './components/medium-pick
 import { wireCallEvents } from './lib/events';
 import { detectPlatform, safeTimezone, safeMatchMedia } from './lib/env';
 import { readConsent, writeConsent } from './lib/consent';
+import { MicLevelMeter } from './lib/mic-level';
 import type { ConsentRecord } from './lib/consent';
 import {
   readValidLast,
@@ -435,6 +436,30 @@ export class AddressWidget extends LitElement {
    * to the SWML side as `userVariables.metadata.consent` so the agent
    * can audit it.
    */
+  /**
+   * Run a live microphone check on the pre-call setup screen. Default true.
+   *
+   * A microphone that is present but carries no signal — a virtual device
+   * with nothing routed into it, a muted hardware switch, an interface with
+   * its gain at zero — satisfies `getUserMedia` completely. The track is
+   * live, every constraint is met, and nothing in the WebRTC API
+   * distinguishes it from a working one. The only way a caller can tell is
+   * by watching a level meter while they speak, which is what this draws.
+   *
+   * The trade-off, and the reason it is switchable: the check opens the
+   * microphone when the setup modal opens, so the browser's permission
+   * prompt and recording indicator appear one step EARLIER than they
+   * otherwise would — at the setup screen rather than at dial. Some hosts
+   * would rather not ask until the caller has committed to the call. Set
+   * `mic-check="false"` for that; the picker still works, it just cannot
+   * show whether the chosen device is actually producing sound.
+   *
+   * Turning this off does not disable the mid-call dead-microphone warning,
+   * which costs nothing extra because the call already holds the mic.
+   */
+  @property({ attribute: 'mic-check', reflect: true, converter: boolDefaultTrue })
+  micCheck = true;
+
   @property({ attribute: 'consent-required', reflect: true, converter: boolDefaultTrue })
   consentRequired = true;
 
@@ -538,6 +563,17 @@ export class AddressWidget extends LitElement {
   };
   /** Devices enumerated on modal open (best-effort — labels may be
    *  empty until first getUserMedia grants permission). */
+  @state() private _micLevel = 0;
+  @state() private _micSilent = false;
+  @state() private _micError = false;
+  /** Owns the pre-call meter's MediaStream + AudioContext. Never more than
+   *  one: each is replaced (and released) when the device changes. */
+  private _micMeter: MicLevelMeter | null = null;
+  /** Subscription to the live call's outgoing audio level. */
+  private _deadMicSub: { unsubscribe(): void } | undefined;
+  /** One warning per device, not one per silent second. */
+  private _deadMicWarned = false;
+
   @state() private _consentAudioDevices: MediaDeviceInfo[] = [];
   @state() private _consentVideoDevices: MediaDeviceInfo[] = [];
   /**
@@ -1171,6 +1207,10 @@ export class AddressWidget extends LitElement {
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     void this._teardown();
+    // The meter holds a live microphone; a removed element that keeps one
+    // open leaves the browser's recording indicator lit with no UI to
+    // explain it.
+    this._stopMicMeter();
     unlockBodyScroll(this._previousBodyOverflow);
     this._removeEscHandler();
     if (this._visibilityHandler) {
@@ -1226,10 +1266,14 @@ export class AddressWidget extends LitElement {
       };
     }
     this._consentModalOpen = true;
-    // Enumerate devices best-effort. Labels are populated after the
-    // first getUserMedia grants permission; first-call users get
-    // generic "Microphone 1" / "Camera 1" fallback labels.
-    void this._refreshConsentDevices();
+    // Enumerate devices best-effort, then open the meter.
+    //
+    // Order matters and the meter is the reason: opening it calls
+    // getUserMedia, which is what makes the browser reveal device LABELS.
+    // So the enumeration is repeated afterwards — the first pass populates
+    // the dropdown with "Microphone 1" placeholders, the second replaces
+    // them with real names.
+    void this._refreshConsentDevices().then(() => this._startMicMeter());
   }
 
   private async _refreshConsentDevices(): Promise<void> {
@@ -1237,14 +1281,157 @@ export class AddressWidget extends LitElement {
       const devices = await navigator.mediaDevices.enumerateDevices();
       this._consentAudioDevices = devices.filter((d) => d.kind === 'audioinput');
       this._consentVideoDevices = devices.filter((d) => d.kind === 'videoinput');
-    } catch {
+      this._traceDevices('consent:enumerate', {
+        audio: AddressWidget._describeDevices(this._consentAudioDevices),
+        video: AddressWidget._describeDevices(this._consentVideoDevices),
+        // A permission state of 'granted' here means labels should be
+        // populated; 'prompt' means this list is the redacted pre-permission
+        // one and will change after the first getUserMedia.
+        permission: await this._micPermissionState()
+      });
+    } catch (err) {
       this._consentAudioDevices = [];
       this._consentVideoDevices = [];
+      this._traceDevices('consent:enumerate:failed', { error: String(err) });
+    }
+  }
+
+  /**
+   * Watch the outgoing level and warn when a live call is sending silence.
+   *
+   * The pre-call meter catches most of this, but not all of it: a device can
+   * be unplugged mid-call, an interface muted at the hardware, or the visitor
+   * may have clicked straight through the setup screen. The failure is
+   * invisible from their side — the agent simply never responds — so the
+   * warning has to come from us.
+   *
+   * Deliberately quiet about it: fires once, only while unmuted, only after
+   * real samples have arrived, and never again for a device the visitor has
+   * already been told about. A false positive here interrupts a working call
+   * to say something wrong, which is worse than missing a real one.
+   */
+  private _wireDeadMicDetection(call: Call): void {
+    this._deadMicSub?.unsubscribe();
+    this._deadMicSub = undefined;
+    this._deadMicWarned = false;
+
+    const levelCall = call as unknown as {
+      localAudioLevel$?: { subscribe(fn: (v: number) => void): { unsubscribe(): void } };
+    };
+    if (!levelCall.localAudioLevel$) return;
+
+    let silentSince: number | null = null;
+    let sawAnySample = false;
+
+    this._deadMicSub = levelCall.localAudioLevel$.subscribe((level: number) => {
+      sawAnySample = true;
+      // Muting is the visitor deliberately sending silence. Warning about it
+      // would be telling them their microphone is broken because they turned
+      // it off.
+      if (this._audioMuted || this._deadMicWarned) {
+        silentSince = null;
+        return;
+      }
+      if (level > 0.005) {
+        silentSince = null;
+        return;
+      }
+      const now = Date.now();
+      if (silentSince === null) {
+        silentSince = now;
+        return;
+      }
+      if (sawAnySample && now - silentSince > 5000) {
+        this._deadMicWarned = true;
+        this._traceDevices('deadmic:warned', {
+          selected: this._selectedAudioInputId,
+          consent: this._consent?.audioDeviceId ?? null
+        });
+        this._showBanner({
+          level: 'warning',
+          text: "We're not hearing anything from your microphone. Use the mic menu to pick a different one.",
+          dismissible: true
+        });
+      }
+    });
+  }
+
+  /** Clear the dead-mic warning — the visitor has acted on it. */
+  private _dismissDeadMic(): void {
+    this._deadMicWarned = false;
+    if (this._banner?.level === 'warning') this._banner = null;
+  }
+
+  /**
+   * Open (or re-open) the pre-call level meter on the drafted device.
+   *
+   * Always stops the previous meter first. Each one holds a MediaStream and
+   * an AudioContext, and browsers cap concurrent AudioContexts at a handful
+   * — leaking one per device change would make the picker stop metering
+   * after a few switches, which looks exactly like the microphone failing.
+   */
+  private _startMicMeter(): void {
+    this._stopMicMeter();
+    // Gated here rather than at the call sites so every path that would
+    // start a meter — modal open, device change, re-ticking audio — is
+    // covered by the one check.
+    if (!this.micCheck) return;
+    if (!this._consentModalOpen || !this._consentDraft.audio) return;
+    this._micError = false;
+    this._micSilent = false;
+    this._micLevel = 0;
+    const meter = new MicLevelMeter({
+      deviceId: this._consentDraft.audioDeviceId,
+      onLevel: (level) => {
+        // Only re-render when the bar would visibly move. At 60fps an
+        // unconditional assignment is 60 Lit updates a second for a
+        // difference nobody can see.
+        if (Math.abs(level - this._micLevel) > 0.01) this._micLevel = level;
+        if (meter.silent !== this._micSilent) this._micSilent = meter.silent;
+      },
+      onError: (err) => {
+        this._micError = true;
+        this._traceDevices('meter:error', { error: String(err) });
+      }
+    });
+    this._micMeter = meter;
+    void meter.start().then(() => {
+      // getUserMedia has now granted permission, so a second enumeration
+      // returns real device labels where the first returned placeholders.
+      if (this._consentModalOpen) void this._refreshConsentDevices();
+    });
+  }
+
+  private _stopMicMeter(): void {
+    this._micMeter?.stop();
+    this._micMeter = null;
+    this._micLevel = 0;
+    this._micSilent = false;
+  }
+
+  /**
+   * Current microphone permission, when the browser will tell us.
+   *
+   * `navigator.permissions.query({name:'microphone'})` is unsupported in
+   * Firefox and throws on some older Safari builds, so this is best-effort
+   * and returns 'unknown' rather than propagating.
+   */
+  private async _micPermissionState(): Promise<string> {
+    try {
+      const perms = (navigator as unknown as {
+        permissions?: { query(d: { name: string }): Promise<{ state: string }> };
+      }).permissions;
+      if (!perms) return 'unsupported';
+      const status = await perms.query({ name: 'microphone' });
+      return status.state;
+    } catch {
+      return 'unknown';
     }
   }
 
   private _cancelConsentModal(): void {
     this._consentModalOpen = false;
+    this._stopMicMeter();
   }
 
   private async _acceptConsent(): Promise<void> {
@@ -1261,6 +1448,10 @@ export class AddressWidget extends LitElement {
     );
     this._consent = record;
     this._consentModalOpen = false;
+    // Release the preview microphone BEFORE dialling. Leaving it open means
+    // two live captures of the same device for the length of the call, and
+    // on some platforms the second one is the silent loser.
+    this._stopMicMeter();
     // Tell consumers + the agent that consent was given.
     this.onConsentGiven?.(record);
     this.dispatchEvent(
@@ -1645,8 +1836,17 @@ export class AddressWidget extends LitElement {
             echoCancellation: this.echoCancellation,
             noiseSuppression: this.noiseSuppression,
             autoGainControl: this.autoGainControl,
+            // A PREFERENCE, not `{ exact: … }`.
+            //
+            // `exact` makes a remembered device a hard requirement, so a
+            // headset that is merely unplugged since last time turns the
+            // whole dial into an OverconstrainedError — the call fails
+            // outright rather than falling back to a working microphone.
+            // The bare form asks for the same device and quietly accepts
+            // another when it is gone, which is what someone reconnecting
+            // from a different desk actually wants.
             ...(this._consent?.audioDeviceId
-              ? { deviceId: { exact: this._consent.audioDeviceId } }
+              ? { deviceId: this._consent.audioDeviceId }
               : {})
           }
         : undefined;
@@ -1669,6 +1869,15 @@ export class AddressWidget extends LitElement {
         ...(this.nodeId ? { nodeId: this.nodeId } : {})
       });
       this._call = call;
+
+      // What the browser actually handed us, versus what we asked for.
+      //
+      // This is the decisive probe for the dead-microphone case: a device
+      // that exists but carries no signal satisfies getUserMedia perfectly,
+      // so the only way to notice is to compare the granted deviceId against
+      // the requested one and then watch the level. A `requested` that does
+      // not equal `granted` means the constraint was ignored or relaxed.
+      void this._traceGrantedTrack(call);
 
       // Record this widget as the owner of the active call so a page
       // reload can route reattach back here. Persisted chat/content
@@ -1853,6 +2062,13 @@ export class AddressWidget extends LitElement {
 
     // Device lists + selection come from the client's DeviceController.
     this._wireDeviceObservables();
+    // Tell the DeviceController what the visitor chose. Passing the device
+    // as a dial constraint is not enough on its own: the constraint shapes
+    // the track, but the controller's own selection state never learns of
+    // it, so `selectedAudioInputDevice$` keeps reporting null and the
+    // picker highlights "default" while a different microphone is live.
+    void this._applyConsentDeviceSelection();
+    this._wireDeadMicDetection(call);
 
     // Ring updates on recovery / network issues. Priority:
     // reconnecting > network-warning > ai-speaking > none.
@@ -1982,29 +2198,116 @@ export class AddressWidget extends LitElement {
     }
   }
 
+  /**
+   * Device-pipeline tracing, behind `debug`.
+   *
+   * The device path fails quietly and in ways that look like each other: an
+   * empty list because permission has not been granted yet is
+   * indistinguishable, at the UI, from an empty list because the machine has
+   * no microphone — and a selected-device id that never matches anything in
+   * the list looks exactly like no selection at all. Every transition is
+   * logged with enough detail to tell those apart after the fact.
+   *
+   * Labels are included deliberately: a device list whose entries all have
+   * blank labels is the signature of a pre-permission enumeration, and that
+   * is the single most useful thing to know when the picker is empty.
+   */
+  /**
+   * Log the settings of the audio track the call actually got.
+   *
+   * Waits for `localStream$` rather than reading immediately: the track does
+   * not exist until getUserMedia resolves, and reading too early reports
+   * nothing and looks like failure.
+   */
+  private async _traceGrantedTrack(call: Call): Promise<void> {
+    if (!this.debug) return;
+    try {
+      const streamCall = call as unknown as {
+        localStream$?: { subscribe(fn: (s: MediaStream | null) => void): { unsubscribe(): void } };
+      };
+      if (!streamCall.localStream$) return;
+      let done = false;
+      const sub = streamCall.localStream$.subscribe((stream) => {
+        if (done || !stream) return;
+        done = true;
+        const track = stream.getAudioTracks()[0];
+        this._traceDevices('granted:audioTrack', {
+          requested: this._consent?.audioDeviceId ?? '(browser default)',
+          granted: track?.getSettings?.().deviceId ?? '(none)',
+          label: track?.label ?? '(none)',
+          enabled: track?.enabled,
+          muted: track?.muted,
+          readyState: track?.readyState
+        });
+        queueMicrotask(() => sub.unsubscribe());
+      });
+      // Not pushed onto _deviceSubs: that array is typed as rxjs
+      // Subscriptions and this one unsubscribes itself on first stream.
+    } catch (err) {
+      this._traceDevices('granted:audioTrack:failed', { error: String(err) });
+    }
+  }
+
+  private _traceDevices(event: string, detail: Record<string, unknown>): void {
+    if (!this.debug) return;
+    console.log(`[address-widget][devices] ${event}`, detail);
+  }
+
+  private static _describeDevices(devices: MediaDeviceInfo[]): Record<string, unknown> {
+    return {
+      count: devices.length,
+      // `labelled` is the permission tell: browsers redact labels until
+      // getUserMedia has been granted at least once.
+      labelled: devices.filter((d) => !!d.label).length,
+      entries: devices.map((d) => ({
+        id: d.deviceId ? d.deviceId.slice(0, 12) : '(empty)',
+        label: d.label || '(blank)'
+      }))
+    };
+  }
+
   private _wireDeviceObservables(): void {
     for (const sub of this._deviceSubs) sub.unsubscribe();
     this._deviceSubs = [];
     const client = this._client?.client;
-    if (!client) return;
+    if (!client) {
+      this._traceDevices('wire:skipped', { reason: 'no client' });
+      return;
+    }
+    this._traceDevices('wire:start', {
+      consentAudioDeviceId: this._consent?.audioDeviceId ?? null,
+      consentVideoDeviceId: this._consent?.videoDeviceId ?? null
+    });
     this._deviceSubs.push(
       client.audioInputDevices$.subscribe((devices: MediaDeviceInfo[]) => {
         this._audioInputDevices = devices;
+        this._traceDevices('audioInputDevices$', AddressWidget._describeDevices(devices));
       })
     );
     this._deviceSubs.push(
       client.videoInputDevices$.subscribe((devices: MediaDeviceInfo[]) => {
         this._videoInputDevices = devices;
+        this._traceDevices('videoInputDevices$', AddressWidget._describeDevices(devices));
       })
     );
     this._deviceSubs.push(
       client.selectedAudioInputDevice$.subscribe((device: MediaDeviceInfo | null) => {
         this._selectedAudioInputId = device?.deviceId ?? null;
+        this._traceDevices('selectedAudioInputDevice$', {
+          id: device?.deviceId ?? null,
+          label: device?.label ?? null,
+          // The mismatch that makes the menu highlight the wrong row.
+          matchesConsent: (device?.deviceId ?? null) === (this._consent?.audioDeviceId ?? null)
+        });
       })
     );
     this._deviceSubs.push(
       client.selectedVideoInputDevice$.subscribe((device: MediaDeviceInfo | null) => {
         this._selectedVideoInputId = device?.deviceId ?? null;
+        this._traceDevices('selectedVideoInputDevice$', {
+          id: device?.deviceId ?? null,
+          label: device?.label ?? null
+        });
       })
     );
   }
@@ -2038,12 +2341,144 @@ export class AddressWidget extends LitElement {
     });
   }
 
+  /**
+   * Push the stored consent choice into the client's DeviceController.
+   *
+   * Runs after dial, because the device list is only trustworthy once
+   * getUserMedia has granted permission — before that the entries carry
+   * blank labels and, in some browsers, placeholder ids that match nothing.
+   *
+   * A stored id that no longer resolves is dropped rather than forced: the
+   * device has been unplugged, the call is already up on whatever the
+   * browser picked instead, and overriding that would take working audio
+   * away. The stale id is cleared from the record so the next call starts
+   * from the default rather than chasing a device that is gone.
+   */
+  private async _applyConsentDeviceSelection(): Promise<void> {
+    const client = this._client?.client;
+    if (!client || !this._consent) return;
+
+    const wantedAudio = this._consent.audioDeviceId;
+    const wantedVideo = this._consent.videoDeviceId;
+    if (!wantedAudio && !wantedVideo) return;
+
+    // The lists arrive asynchronously; give them a moment to populate rather
+    // than reading a list that is empty only because nothing has emitted yet.
+    const devices = await this._awaitDeviceLists();
+
+    if (wantedAudio) {
+      const match = devices.audio.find((d) => d.deviceId === wantedAudio);
+      if (match) {
+        try {
+          client.selectAudioInputDevice(match);
+          this._traceDevices('consent:applied:audio', { id: match.deviceId, label: match.label });
+        } catch (err) {
+          this._traceDevices('consent:apply:audio:failed', { error: String(err) });
+        }
+      } else {
+        this._traceDevices('consent:stale:audio', { wanted: wantedAudio });
+        this._forgetStoredDevice('audio');
+      }
+    }
+
+    if (wantedVideo) {
+      const match = devices.video.find((d) => d.deviceId === wantedVideo);
+      if (match) {
+        try {
+          client.selectVideoInputDevice(match);
+          this._traceDevices('consent:applied:video', { id: match.deviceId, label: match.label });
+        } catch (err) {
+          this._traceDevices('consent:apply:video:failed', { error: String(err) });
+        }
+      } else {
+        this._traceDevices('consent:stale:video', { wanted: wantedVideo });
+        this._forgetStoredDevice('video');
+      }
+    }
+  }
+
+  /**
+   * Resolve once the device lists look post-permission, or give up.
+   *
+   * "Looks post-permission" means at least one entry carries a label —
+   * browsers redact labels until getUserMedia has been granted, so a list of
+   * blank-labelled entries is the pre-permission list and matching against
+   * it would fail for reasons that have nothing to do with the device.
+   */
+  private async _awaitDeviceLists(
+    timeoutMs = 2000
+  ): Promise<{ audio: MediaDeviceInfo[]; video: MediaDeviceInfo[] }> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const audio = this._audioInputDevices;
+      const video = this._videoInputDevices;
+      if (audio.some((d) => d.label) || video.some((d) => d.label)) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return { audio: this._audioInputDevices, video: this._videoInputDevices };
+  }
+
+  /** Drop a device id that no longer resolves, so it is not retried forever. */
+  private _forgetStoredDevice(kind: 'audio' | 'video'): void {
+    if (!this._consent) return;
+    const next = {
+      ...this._consent,
+      ...(kind === 'audio' ? { audioDeviceId: null } : { videoDeviceId: null })
+    };
+    this._consent = next;
+    writeConsent(
+      next.audio,
+      this.consentVersion,
+      next.train,
+      next.camera,
+      next.audioDeviceId,
+      next.videoDeviceId
+    );
+  }
+
+  /**
+   * Remember a mid-call device change.
+   *
+   * Without this the choice lasts exactly as long as the call: the next dial
+   * re-reads the consent record, finds the old device still in it, and
+   * re-selects the one the visitor just rejected. Someone switching away
+   * from a dead microphone has to do it again on every call, which reads as
+   * the setting not working at all.
+   */
+  private _rememberDeviceChoice(kind: 'audio' | 'video', deviceId: string): void {
+    if (!this._consent) return;
+    if (
+      (kind === 'audio' ? this._consent.audioDeviceId : this._consent.videoDeviceId) === deviceId
+    ) {
+      return;
+    }
+    const next = {
+      ...this._consent,
+      ...(kind === 'audio' ? { audioDeviceId: deviceId } : { videoDeviceId: deviceId })
+    };
+    this._consent = next;
+    writeConsent(
+      next.audio,
+      this.consentVersion,
+      next.train,
+      next.camera,
+      next.audioDeviceId,
+      next.videoDeviceId
+    );
+    this._traceDevices('choice:persisted', { kind, deviceId });
+  }
+
   private _selectAudioDevice(device: MediaDeviceInfo): void {
     this._client?.client.selectAudioInputDevice(device);
+    this._rememberDeviceChoice('audio', device.deviceId);
+    // A deliberate device change is a statement that the current one is
+    // wrong; clear any dead-microphone warning raised against it.
+    this._dismissDeadMic();
   }
 
   private _selectVideoDevice(device: MediaDeviceInfo): void {
     this._client?.client.selectVideoInputDevice(device);
+    this._rememberDeviceChoice('video', device.deviceId);
   }
 
   private _startAiSpeakingRing(): void {
@@ -2441,6 +2876,13 @@ export class AddressWidget extends LitElement {
   }
 
   private async _teardown(): Promise<void> {
+    // Released here rather than only in disconnectedCallback: a medium
+    // switch tears the call down while the element stays mounted, and a
+    // subscription to the old call's level would keep warning about a
+    // microphone that is no longer sending anything anywhere.
+    this._deadMicSub?.unsubscribe();
+    this._deadMicSub = undefined;
+    this._deadMicWarned = false;
     if (this._unwireEvents) {
       try {
         this._unwireEvents();
@@ -2868,12 +3310,26 @@ export class AddressWidget extends LitElement {
             showCameraOption: this.video,
             audioDevices: this._consentAudioDevices,
             videoDevices: this._consentVideoDevices,
+            micCheck: this.micCheck,
+            micLevel: this._micLevel,
+            micSilent: this._micSilent,
+            micError: this._micError,
             dialogRef: this._consentModalRef,
             onDraftChange: (field, value) => {
               this._consentDraft = {
                 ...this._consentDraft,
                 [field]: value as never
               };
+              // Re-point the meter at whatever they just chose. Without
+              // this the bar keeps metering the PREVIOUS microphone, which
+              // is worse than no meter: it shows a healthy level for a
+              // device they have already switched away from.
+              if (field === 'audioDeviceId') {
+                this._startMicMeter();
+              } else if (field === 'audio') {
+                if (value) this._startMicMeter();
+                else this._stopMicMeter();
+              }
             },
             onAccept: () => {
               void this._acceptConsent();

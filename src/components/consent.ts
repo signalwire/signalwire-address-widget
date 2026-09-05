@@ -41,6 +41,19 @@ export interface ConsentModalContext {
   showCameraOption: boolean;
   /** Enumerated audio input devices. Empty array hides the picker. */
   audioDevices: MediaDeviceInfo[];
+  /** Whether the live microphone check is enabled at all. When false the
+   *  meter is not rendered and no microphone is opened on this screen. */
+  micCheck: boolean;
+  /** Live input level, 0..1, for the meter beside the microphone picker. */
+  micLevel: number;
+  /**
+   * True once the selected microphone has been continuously silent long
+   * enough to be worth flagging. Distinct from `micLevel === 0`, which is
+   * also true for the first frame and between words.
+   */
+  micSilent: boolean;
+  /** Whether the meter could not open the microphone at all. */
+  micError: boolean;
   /** Enumerated video input devices. Empty array hides the picker. */
   videoDevices: MediaDeviceInfo[];
   /** Stable dialog ref so the parent can call `showModal()` /
@@ -146,6 +159,49 @@ export const consentStyles = css`
     outline: 2px solid var(--sw-address-brand-blue);
     outline-offset: 2px;
   }
+  .mic-meter {
+    margin-top: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .mic-meter__bar {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--sw-address-bg-raised);
+    border: 1px solid var(--sw-address-border);
+    overflow: hidden;
+  }
+  .mic-meter__fill {
+    height: 100%;
+    /* Turquoise: the brand's positive-state colour, and this is the one
+       genuinely positive signal on the screen — the microphone works. */
+    background: var(--sw-address-positive);
+    transition: width 60ms linear;
+  }
+  /* Gold is the warning role. Reserved for exactly this: a microphone that
+     is connected and producing nothing, which the visitor can still fix. */
+  .mic-meter[data-silent='true'] .mic-meter__bar {
+    border-color: var(--sw-address-warning);
+  }
+  .mic-meter[data-silent='true'] .mic-meter__hint {
+    color: var(--sw-address-warning);
+  }
+  .mic-meter__hint {
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--sw-address-fg-muted);
+  }
+  .mic-meter--error {
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--sw-address-warning);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .mic-meter__fill {
+      transition: none;
+    }
+  }
   .consent-toggle {
     display: flex;
     align-items: center;
@@ -246,6 +302,46 @@ export const consentStyles = css`
 
 `;
 
+/**
+ * Live input meter.
+ *
+ * The point is not decoration: a microphone with no signal is
+ * indistinguishable from a working one through every WebRTC API, so the only
+ * way a visitor can tell is by watching the bar move while they talk. The
+ * "no signal" state is called out explicitly rather than left as a flat bar,
+ * because a flat bar reads as "not started yet" and gets ignored.
+ */
+function renderMicMeter(ctx: ConsentModalContext): TemplateResult | typeof nothing {
+  if (!ctx.micCheck) return nothing;
+  if (ctx.micError) {
+    return html`<div class="mic-meter mic-meter--error" role="status">
+      Can't open that microphone. Pick another, or check your browser's
+      microphone permission.
+    </div>`;
+  }
+  const pct = Math.round(Math.min(1, Math.max(0, ctx.micLevel)) * 100);
+  return html`
+    <div class="mic-meter" data-silent=${String(ctx.micSilent)}>
+      <div
+        class="mic-meter__bar"
+        role="meter"
+        aria-label="Microphone input level"
+        aria-valuenow=${pct}
+        aria-valuemin="0"
+        aria-valuemax="100"
+      >
+        <div class="mic-meter__fill" style=${`width:${pct}%`}></div>
+      </div>
+      <div class="mic-meter__hint">
+        ${ctx.micSilent
+          ? html`<strong>No sound detected.</strong> Say something \u2014 if the bar
+              stays flat, this microphone isn't picking anything up.`
+          : html`Say something to check your microphone.`}
+      </div>
+    </div>
+  `;
+}
+
 export function renderConsentModal(ctx: ConsentModalContext): TemplateResult {
   // Audio is required for an AI voice demo to function — the checkbox
   // is rendered for transparency but disabled-checked. Video is the
@@ -322,6 +418,7 @@ export function renderConsentModal(ctx: ConsentModalContext): TemplateResult {
                   (d, i) => html`<option value=${d.deviceId}>${d.label || `Microphone ${i + 1}`}</option>`
                 )}
               </select>
+              ${renderMicMeter(ctx)}
             </div>`
           : nothing}
         ${ctx.showCameraOption && ctx.videoDevices.length > 0 && ctx.draft.camera

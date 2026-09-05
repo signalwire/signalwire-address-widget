@@ -280,6 +280,19 @@ export interface WidgetOptions {
    */
   consentRequired?: boolean;
   /**
+   * Run a live microphone check on the pre-call setup screen. Default true.
+   *
+   * Draws a level meter so a caller can see whether the selected microphone
+   * is actually producing sound — a device that is present but silent
+   * satisfies `getUserMedia` completely, so nothing else reveals it.
+   *
+   * The cost is that the browser's permission prompt and recording
+   * indicator appear at the setup screen rather than at dial. Set false to
+   * defer them; the device picker still works, it just cannot show whether
+   * the chosen device is live.
+   */
+  micCheck?: boolean;
+  /**
    * Schema / policy version tag for the consent record. Bump when
    * copy or scope materially changes so old consent invalidates and
    * users see the new prompt. Defaults to 2.

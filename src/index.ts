@@ -124,6 +124,7 @@ export function mount(target: Target, options: WidgetOptions): AddressWidget {
   if (options.onSidecarEvent !== undefined) {
     widget.onSidecarEvent = options.onSidecarEvent;
   }
+  if (options.micCheck !== undefined) widget.micCheck = options.micCheck;
   if (options.consentRequired !== undefined) widget.consentRequired = options.consentRequired;
   if (options.consentVersion !== undefined) widget.consentVersion = options.consentVersion;
   if (options.onConsentGiven !== undefined) {

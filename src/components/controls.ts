@@ -408,6 +408,12 @@ function closePopoverFromEvent(event: Event): void {
 }
 
 export function renderControls(ctx: ControlsContext): TemplateResult {
+  // The device chevrons are gated on the client alone, deliberately NOT on
+  // `devices.length`. An empty list is a reason to OPEN the menu, not to lock
+  // it: it is empty most often because enumeration ran before permission was
+  // granted, and disabling the control at exactly that moment strands someone
+  // on a dead microphone with no way to reach the picker. The menu itself
+  // renders "No devices detected" for the genuinely-empty case.
   const callReady = ctx.call !== null;
   const active = callReady;
 
@@ -432,7 +438,7 @@ export function renderControls(ctx: ControlsContext): TemplateResult {
           aria-haspopup="menu"
           popovertarget="sw-address-mic-menu"
           popovertargetaction="toggle"
-          ?disabled=${!ctx.client || ctx.audioInputDevices.length === 0}
+          ?disabled=${!ctx.client}
           title="Select microphone"
         >
           ${iconChevron}
@@ -467,7 +473,7 @@ export function renderControls(ctx: ControlsContext): TemplateResult {
                 aria-haspopup="menu"
                 popovertarget="sw-address-cam-menu"
                 popovertargetaction="toggle"
-                ?disabled=${!ctx.client || ctx.videoInputDevices.length === 0}
+                ?disabled=${!ctx.client}
                 title="Select camera"
               >
                 ${iconChevron}
