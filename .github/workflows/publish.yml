@@ -69,12 +69,29 @@ jobs:
             echo "Version unchanged ($current) — will publish dev release"
           fi
 
+      # TEMPORARY: is the OIDC machinery even present, and does npm try it?
+      # ENEEDAUTH means npm wanted a token and never ran the exchange — this
+      # says whether that is a missing id-token env or npm declining to try.
+      # Prints presence only, never the token value.
+      - name: Diagnose OIDC
+        continue-on-error: true
+        run: |
+          echo "npm:                 $(npm --version)"
+          echo "id-token URL present:   ${ACTIONS_ID_TOKEN_REQUEST_URL:+yes}${ACTIONS_ID_TOKEN_REQUEST_URL:-NO}"
+          echo "id-token secret present:${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+yes}${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-NO}"
+          echo "registry:            $(npm config get registry)"
+          echo "userconfig env:      ${NPM_CONFIG_USERCONFIG:-<unset>}"
+          if [ -n "${NPM_CONFIG_USERCONFIG:-}" ] && [ -f "$NPM_CONFIG_USERCONFIG" ]; then
+            echo "--- userconfig contents (authToken redacted) ---"
+            sed -E 's/(_authToken=).*/\1<redacted>/' "$NPM_CONFIG_USERCONFIG"
+          fi
+
       # No NODE_AUTH_TOKEN on any publish below: OIDC handles auth, and
       # provenance is generated automatically for a public repo under trusted
       # publishing, so the --provenance flag is likewise unnecessary.
       - name: Publish latest
         if: steps.version.outputs.bumped == 'true'
-        run: npm publish --tag latest --access public
+        run: npm publish --tag latest --access public --loglevel verbose
 
       - name: Set dev version
         if: steps.version.outputs.bumped != 'true'
@@ -85,4 +102,4 @@ jobs:
 
       - name: Publish dev
         if: steps.version.outputs.bumped != 'true'
-        run: npm publish --tag dev --access public
+        run: npm publish --tag dev --access public --loglevel verbose
