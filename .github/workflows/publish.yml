@@ -51,6 +51,19 @@ jobs:
             echo "Version unchanged ($current) — will publish dev release"
           fi
 
+      # A scoped publish 404s identically whether the token is invalid, belongs
+      # to nobody in the org, or belongs to someone without write access to this
+      # package — npm will not distinguish them. Without this the only way to
+      # tell those apart is to keep minting tokens and guessing.
+      - name: Identify the publishing account
+        continue-on-error: true
+        run: |
+          echo "authenticated as: $(npm whoami 2>&1 || echo '<whoami failed — token invalid or unset>')"
+          echo "write access in @signalwire:"
+          npm access list packages @signalwire 2>&1 | head -20 || true
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
       - name: Publish latest
         if: steps.version.outputs.bumped == 'true'
         run: npm publish --tag latest --provenance --access public
