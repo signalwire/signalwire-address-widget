@@ -61,6 +61,12 @@ Minor rather than patch: this adds public API, not only fixes.
 
 ### Fixed
 
+- **The `VERSION` export reported `0.1.0`** through two releases. Its own
+  comment said it was injected at build time; it was a hardcoded literal, so
+  the one export whose entire job is reporting the version was the only thing
+  in the bundle getting it wrong — the emitted `.d.ts` declared the literal
+  type `"0.1.0"` along with it. `capabilities.version`, which is what agents
+  actually read, has always used the build-time define and was never affected.
 - **`video="false"` / `audio="false"` now actually turn those off.** Both
   properties used Lit's built-in Boolean converter, where any attribute
   presence resolves to `true` — so the audio-only mode documented since 0.1.0

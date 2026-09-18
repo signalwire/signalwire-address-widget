@@ -33,8 +33,16 @@ export type {
   CallEventDetail
 } from './types';
 
-/** Published library version. Injected at build time via vite define. */
-export const VERSION = '0.1.0';
+/**
+ * Published library version. Injected at build time via vite define.
+ *
+ * It was a hardcoded `'0.1.0'` through two releases despite this comment, so
+ * the one export whose entire job is reporting the version was the only thing
+ * in the bundle getting it wrong — including in the emitted `.d.ts`, which
+ * declared the literal type `"0.1.0"`. `capabilities.version`, which the agent
+ * actually reads, has always used the define and was never affected.
+ */
+export const VERSION: string = __WIDGET_VERSION__;
 
 type Target = string | Element;
 
