@@ -25,10 +25,17 @@ jobs:
           fetch-depth: 2
 
       # Node 24 for npm >= 11.5.1, which is the floor for OIDC publishing.
+      #
+      # Deliberately NO registry-url: it makes setup-node write an
+      # `_authToken=${NODE_AUTH_TOKEN}` line into .npmrc, which with no token
+      # set is an EMPTY credential plus always-auth=true — and npm then uses
+      # that empty token and never attempts the OIDC exchange, failing with a
+      # masked 404. registry.npmjs.org is the default registry anyway, so
+      # omitting this changes nothing except letting OIDC actually fire.
+      # Refs actions/setup-node#1551, npm/documentation#1960.
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
 
       # setup-node's bundled npm can trail the OIDC floor; pin it up explicitly
       # so a runner-image bump can't drop us below 11.5.1 silently.
