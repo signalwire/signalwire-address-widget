@@ -33,13 +33,14 @@ Minor rather than patch: this adds public API, not only fixes.
   usually empty only because enumeration ran before permission was granted,
   and disabling it there strands the caller with no way to reach the picker.
 
-## 0.3.1
+## 0.3.2
 
-First build of the 0.3.0 feature set to actually reach the registry: 0.3.0
-was cut but never published, because npm revoked classic tokens mid-release
-and the granular replacements kept minting with an empty package scope. The
-pipeline moved to OIDC trusted publishing; 0.3.1 is 0.3.0 plus that CI
-change. No runtime difference from the never-published 0.3.0.
+First release of the chat page-context work to reach the `latest` tag. 0.3.0
+and 0.3.1 were cut but never published there: npm revoked classic tokens
+mid-release, the granular replacements kept minting with an empty package
+scope, and the pipeline had to move to OIDC trusted publishing. 0.3.2 is that
+same feature set, published over OIDC. No runtime difference between these
+versions — the gap was entirely in how the package got to the registry.
 
 ### Added
 
