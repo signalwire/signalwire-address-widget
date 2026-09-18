@@ -69,37 +69,12 @@ jobs:
             echo "Version unchanged ($current) — will publish dev release"
           fi
 
-      # TEMPORARY: is the OIDC machinery even present, and does npm try it?
-      # ENEEDAUTH means npm wanted a token and never ran the exchange — this
-      # says whether that is a missing id-token env or npm declining to try.
-      # Prints presence only, never the token value.
-      - name: Diagnose OIDC
-        continue-on-error: true
-        run: |
-          echo "npm:                 $(npm --version)"
-          echo "id-token URL present:   ${ACTIONS_ID_TOKEN_REQUEST_URL:+yes}${ACTIONS_ID_TOKEN_REQUEST_URL:-NO}"
-          echo "id-token secret present:${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+yes}${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-NO}"
-          echo "registry:            $(npm config get registry)"
-          echo "userconfig env:      ${NPM_CONFIG_USERCONFIG:-<unset>}"
-          echo "--- the identity npm asks the registry to match (NOT the token) ---"
-          # Fetch the same OIDC token npm requests, decode ONLY the JWT payload
-          # (never printed raw), and surface the exact claims a Trusted Publisher
-          # config must match. These are public identity claims, not secrets.
-          resp=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=npm:registry.npmjs.org")
-          node -e '
-            const r = JSON.parse(process.argv[1]);
-            const p = JSON.parse(Buffer.from(r.value.split(".")[1], "base64url"));
-            for (const k of ["repository_owner","repository","workflow","workflow_ref","job_workflow_ref","ref","environment","sub"])
-              console.log(`  ${k.padEnd(18)} ${p[k] ?? "<none>"}`);
-          ' "$resp"
-
       # No NODE_AUTH_TOKEN on any publish below: OIDC handles auth, and
       # provenance is generated automatically for a public repo under trusted
       # publishing, so the --provenance flag is likewise unnecessary.
       - name: Publish latest
         if: steps.version.outputs.bumped == 'true'
-        run: npm publish --tag latest --access public --loglevel verbose
+        run: npm publish --tag latest --access public
 
       - name: Set dev version
         if: steps.version.outputs.bumped != 'true'
@@ -110,4 +85,4 @@ jobs:
 
       - name: Publish dev
         if: steps.version.outputs.bumped != 'true'
-        run: npm publish --tag dev --access public --loglevel verbose
+        run: npm publish --tag dev --access public
