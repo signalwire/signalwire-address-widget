@@ -33,7 +33,13 @@ Minor rather than patch: this adds public API, not only fixes.
   usually empty only because enumeration ran before permission was granted,
   and disabling it there strands the caller with no way to reach the picker.
 
-## Unreleased
+## 0.3.1
+
+First build of the 0.3.0 feature set to actually reach the registry: 0.3.0
+was cut but never published, because npm revoked classic tokens mid-release
+and the granular replacements kept minting with an empty package scope. The
+pipeline moved to OIDC trusted publishing; 0.3.1 is 0.3.0 plus that CI
+change. No runtime difference from the never-published 0.3.0.
 
 ### Added
 
