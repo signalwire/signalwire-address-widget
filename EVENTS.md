@@ -107,9 +107,16 @@ SignalWireAddressWidget.mount('#target', {
 
 Use this to drive host-page UI from the agent side without modifying the widget.
 
-## What the widget tells you at dial time
+## What the widget tells you when a conversation opens
 
-Unless the host page sets `auto-identify="false"`, every dial carries two nested objects in userVariables (`result.user_data` in SWML). Read them rather than guessing what the caller can see.
+Unless the host page sets `auto-identify="false"`, the widget sends two nested objects describing the client and its session. Both transports send the same two, so one parse serves both:
+
+| transport | where it arrives |
+|---|---|
+| voice | userVariables on the dial — `result.user_data` in SWML |
+| chat | `params.user_meta_data` on your agent's config request |
+
+Read them rather than guessing what the caller can see.
 
 `capabilities` is the contract — what this client can actually render:
 
@@ -117,6 +124,7 @@ Unless the host page sets `auto-identify="false"`, every dial carries two nested
 {
   "widget": "signalwire-address",
   "version": "<widget version>",
+  "medium": "voice",
   "display_content": { "formats": ["text", "markdown", "code", "html"], "persistent": true, "copyable": true },
   "transcript": true,
   "video": true,
@@ -126,12 +134,21 @@ Unless the host page sets `auto-identify="false"`, every dial carries two nested
 }
 ```
 
-Two fields are worth branching on:
+Three fields are worth branching on:
 
+- **`medium`** — `"voice"` or `"chat"`, which transport this particular payload came in on. The rest of the block describes how the widget is *configured*, not what is live: `video: true` on a chat session means an escalation to voice would bring a camera, which is what you want to know before offering one.
 - **`transcript`** — the caller can *see* your words, not just hear them. Markdown and code pushes are worth sending; on a PSTN call they would be wasted.
 - **`chat_handoff`** — this caller can be moved to text. Gate your `switch_to_chat` tool on it so the model never offers a browser the caller doesn't have.
 
 `metadata` carries session context in three buckets (`page`, `client`, `widget`) — URL, referrer, platform, locale, timezone, viewport, accessibility preferences, widget version and theme. When the host page collects recording consent, `metadata.consent` and a top-level `metadata.no_training` flag ride along with it. Full shape in [README.md](./README.md#auto-populated-payloads).
+
+### On chat, this is a snapshot — not a feed
+
+The chat service reads `user_meta_data` **only when it creates the conversation**: the `start` call, or whichever message auto-creates when nothing was started. An already-open conversation does not re-fetch its config, so metadata on later turns is accepted and discarded.
+
+The widget sends it on every turn anyway — it cannot know which one creates — but build your agent as though you are handed the visitor's context **once, at the greeting**. If you need to know they navigated afterwards, send it yourself as a `user_event` or a tool call; the config hook will not tell you.
+
+One thing it is not: the bag is authored by the page. Treat it as a visitor's claim about themselves, never as authority — the same standing as dial-time userVariables, which are equally browser-supplied.
 
 ## Medium switching (voice ↔ text)
 

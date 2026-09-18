@@ -713,7 +713,8 @@ export class AddressWidget extends LitElement {
         persistence: this.chatPersistence,
         alwaysNew: this.chatAlwaysNew,
         timeoutSeconds: this.chatTimeoutSeconds,
-        connectionError: undefined
+        connectionError: undefined,
+        userMetadata: () => this._buildChatVariables()
       },
       {
         onUser: (text) => {
@@ -1580,35 +1581,8 @@ export class AddressWidget extends LitElement {
     //   `capabilities` — what the widget can render (contract)
     //   `metadata`     — page/client/widget context (session features)
     // Consumer userVariables override or extend either via a matching key.
-    const baseMetadata = this.autoIdentify ? this._buildMetadata() : {};
-    // Fold consent (if given) into metadata.consent so the agent /
-    // SWML can audit it. Stays in the metadata bag rather than at the
-    // top level to keep the public userVariables shape stable.
-    if (this._consent) {
-      const meta = baseMetadata as Record<string, unknown>;
-      meta.consent = {
-        audio: this._consent.audio,
-        train: this._consent.train,
-        given_at: this._consent.ts,
-        version: this._consent.version
-      };
-      // Hard-to-miss flag for the agent / SWML side: when the user
-      // declines training, surface a top-level boolean alongside the
-      // nested consent block so policy enforcement doesn't depend on
-      // reading the nested shape.
-      if (!this._consent.train) {
-        meta.no_training = true;
-      }
-    }
     const mergeVars: Record<string, unknown> = {
-      ...(this.autoIdentify
-        ? {
-            capabilities: this._buildCapabilities(),
-            metadata: baseMetadata
-          }
-        : this._consent
-          ? { metadata: baseMetadata }
-          : {}),
+      ...this._buildAutoVariables('voice'),
       // chat -> voice continuity. The handle is opaque and HMAC-signed; the
       // agent verifies it with the gateway it already hosts and recovers the
       // conversation id from inside it. Passing the id itself would defeat
@@ -3026,17 +3000,91 @@ export class AddressWidget extends LitElement {
   }
 
   /**
+   * The auto-identify block both transports send: what the widget can render,
+   * and the session context it can see.
+   *
+   * Extracted so voice and chat cannot drift. An agent that learned to read
+   * `metadata.page.title` off a dial should find it at the same path on a
+   * chat turn — the transports differ, the visitor does not.
+   *
+   * Consumer `userVariables` are deliberately NOT folded in here. They are
+   * highest precedence and must be spread last by the caller, after the
+   * transport's own keys, or a consumer setting one of those names silently
+   * loses to plumbing they cannot see.
+   */
+  private _buildAutoVariables(medium: 'voice' | 'chat'): Record<string, unknown> {
+    const baseMetadata = this.autoIdentify ? this._buildMetadata() : {};
+    // Fold consent (if given) into metadata.consent so the agent /
+    // SWML can audit it. Stays in the metadata bag rather than at the
+    // top level to keep the public userVariables shape stable.
+    if (this._consent) {
+      const meta = baseMetadata as Record<string, unknown>;
+      meta.consent = {
+        audio: this._consent.audio,
+        train: this._consent.train,
+        given_at: this._consent.ts,
+        version: this._consent.version
+      };
+      // Hard-to-miss flag for the agent / SWML side: when the user
+      // declines training, surface a top-level boolean alongside the
+      // nested consent block so policy enforcement doesn't depend on
+      // reading the nested shape.
+      if (!this._consent.train) {
+        meta.no_training = true;
+      }
+    }
+    return {
+      ...(this.autoIdentify
+        ? {
+            capabilities: this._buildCapabilities(medium),
+            metadata: baseMetadata
+          }
+        : this._consent
+          ? { metadata: baseMetadata }
+          : {})
+    };
+  }
+
+  /**
+   * The bag a chat turn carries, sent to the gateway as `user_meta_data` and
+   * reaching the agent's config request at `params.user_meta_data`.
+   *
+   * Same contents as the voice path's dial-time `userVariables` minus the
+   * handoff plumbing, which is dial-specific: a chat session already holds its
+   * own handle, and the escalation nonce is minted when voice is dialled.
+   *
+   * Built fresh per call rather than once per session, because the call that
+   * opens the conversation is the only one whose context the agent ever sees,
+   * and that may be the greeting or a first typed message — see
+   * `ChatClient`'s `userMetadata` for what the service does and does not do
+   * with it.
+   */
+  private _buildChatVariables(): Record<string, unknown> {
+    return {
+      ...this._buildAutoVariables('chat'),
+      ...this._userVariables
+    };
+  }
+
+  /**
    * Advertise to the backend what this widget can render so the agent can
    * tailor its responses (e.g. only emit `display_content` with
    * `format: "code"` when the widget reports support). `version` here is
    * the bundle version the agent is talking to — useful for gating
    * behavior on newer capability additions. Consumers can override via
    * `userVariables.capabilities`.
+   *
+   * `medium` says which transport this particular payload arrived on. The
+   * rest describe how the widget is *configured*, not what is live right now,
+   * so they read the same on both — `video: true` on a chat session means an
+   * escalation to voice would bring a camera, which is exactly what an agent
+   * deciding whether to offer one wants to know.
    */
-  private _buildCapabilities(): Record<string, unknown> {
+  private _buildCapabilities(medium: 'voice' | 'chat' = 'voice'): Record<string, unknown> {
     return {
       widget: 'signalwire-address',
       version: __WIDGET_VERSION__,
+      medium,
       display_content: {
         formats: ['text', 'markdown', 'code', 'html'],
         /** Minimized chips stay in the transcript so the user can reopen any past push. */

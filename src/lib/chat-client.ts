@@ -34,6 +34,26 @@ export interface ChatClientOptions {
   key: string;
   /** Mirror of the widget's `debug` attribute — traces each call direction. */
   debug?: boolean;
+  /**
+   * Page context to send with the calls that reach the agent, as
+   * `user_meta_data`. This is the chat half of what the voice path sends as
+   * dial-time `userVariables` — same bag, same shape — so an agent parses one
+   * structure regardless of which transport the visitor arrived on.
+   *
+   * A function rather than a value because it is read per call, not per
+   * client. The service reads the bag only on the call that CREATES the
+   * conversation — `start`, or whichever `chat` auto-creates when nothing was
+   * started — and which call that turns out to be is not knowable here. So we
+   * send current context every time and let the creating one carry the truth.
+   *
+   * What it is not: a live feed. An open conversation does not re-fetch its
+   * config, so metadata on later turns is accepted and discarded. Verified
+   * against the chat service, because the opposite is the natural assumption.
+   *
+   * Return null or an empty object to send nothing; the key is then absent
+   * rather than present-and-empty.
+   */
+  userMetadata?: () => Record<string, unknown> | null;
 }
 
 /** One turn's reply. */
@@ -91,6 +111,7 @@ export class ChatClient {
   private gatewayUrl: string;
   private key: string;
   private debug: boolean;
+  private userMetadata: (() => Record<string, unknown> | null) | undefined;
   private handle: string | null = null;
 
   constructor(options: ChatClientOptions) {
@@ -99,6 +120,7 @@ export class ChatClient {
     this.gatewayUrl = options.gatewayUrl;
     this.key = options.key;
     this.debug = options.debug || false;
+    this.userMetadata = options.userMetadata;
   }
 
   /** The current handle, for persisting. Null until a conversation opens. */
@@ -120,6 +142,26 @@ export class ChatClient {
 
   private trace(...args: unknown[]): void {
     if (this.debug) console.log('[address-widget][chat]', ...args);
+  }
+
+  /**
+   * Fold the current page context into a request body.
+   *
+   * Only `start` and `chat` get it. `log` and `end` are bookkeeping the agent
+   * never sees, so attaching it there would be bytes on the wire buying
+   * nothing. A provider that throws must not take the turn down with it — the
+   * conversation matters more than the context.
+   */
+  private withMetadata(body: Record<string, unknown>): Record<string, unknown> {
+    if (!this.userMetadata) return body;
+    let meta: Record<string, unknown> | null;
+    try {
+      meta = this.userMetadata();
+    } catch {
+      return body;
+    }
+    if (!meta || Object.keys(meta).length === 0) return body;
+    return { ...body, user_meta_data: meta };
   }
 
   /**
@@ -187,7 +229,7 @@ export class ChatClient {
    * the greeting is a turn. Nothing else in this class does.
    */
   async start(): Promise<{ greeting: string | null; status: string; timeout: number | null }> {
-    const response = await this.post({ method: 'start' });
+    const response = await this.post(this.withMetadata({ method: 'start' }));
     const data = await response.json();
     return {
       greeting: data.greeting ?? null,
@@ -209,7 +251,7 @@ export class ChatClient {
    * take a single chunk off the stream.
    */
   async chat(message: string): Promise<ChatResponse> {
-    const response = await this.post({ method: 'chat', message });
+    const response = await this.post(this.withMetadata({ method: 'chat', message }));
     const data: JsonRpcResponse = await response.json();
 
     if (data.error) {

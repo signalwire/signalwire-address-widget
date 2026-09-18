@@ -48,6 +48,12 @@ export interface ChatSessionOptions {
   timeoutNotice?: string;
   /** Substituted for restore/start failures only — NOT for send failures. */
   connectionError?: string;
+  /**
+   * Page context for the agent, read per call. Forwarded to
+   * {@link ChatClient} verbatim — see its `userMetadata` for why it is a
+   * function and what shape the agent receives.
+   */
+  userMetadata?: () => Record<string, unknown> | null;
 }
 
 export interface ChatSessionCallbacks {
@@ -96,7 +102,8 @@ export class ChatSession {
       this.client = new ChatClient({
         gatewayUrl: opts.gatewayUrl,
         key: opts.key,
-        debug: opts.debug
+        debug: opts.debug,
+        userMetadata: opts.userMetadata
       });
     }
   }

@@ -35,6 +35,30 @@ Minor rather than patch: this adds public API, not only fixes.
 
 ## Unreleased
 
+### Added
+
+- **Page context on the chat transport.** The chat path sent `{method,
+  message, handle}` and nothing else, so an agent that tailored its greeting
+  from `metadata.page.title` on a voice dial got nothing at all on chat. Chat
+  now sends the same `capabilities` + `metadata` bag the voice path sends at
+  dial time, as `user_meta_data`, reaching the agent's config request at
+  `params.user_meta_data`. Same shape, same paths, one parse for both
+  transports. Gated by `auto-identify` exactly as the voice block already was.
+- **`capabilities.medium`** — `"voice"` or `"chat"`, so an agent can tell which
+  transport a payload arrived on. The rest of `capabilities` continues to
+  describe how the widget is *configured* rather than what is live, so
+  `video: true` on a chat session means an escalation would bring a camera.
+
+  Note the service reads `user_meta_data` only on the call that **creates** the
+  conversation. The widget sends it every turn because it cannot know which one
+  that is, but an open conversation never re-fetches its config — so this is a
+  snapshot taken at the greeting, not a live feed of where the visitor is. See
+  [EVENTS.md](./EVENTS.md#on-chat-this-is-a-snapshot--not-a-feed).
+
+  Requires a gateway that forwards the field: `signalwire-python`'s
+  `ChatGateway` gained that in the matching release. An older gateway ignores
+  it, so nothing breaks — the context simply does not arrive.
+
 ### Fixed
 
 - **`video="false"` / `audio="false"` now actually turn those off.** Both

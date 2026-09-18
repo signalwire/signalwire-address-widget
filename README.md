@@ -479,7 +479,14 @@ Precedence, lowest to highest: auto-populated → your `userVariables` → `setU
 
 ### Auto-populated payloads
 
-With `auto-identify` on (the default), the widget adds two nested objects.
+With `auto-identify` on (the default), the widget adds two nested objects — on **both** transports, at the same paths:
+
+| transport | where the agent reads them |
+|---|---|
+| voice | `userVariables` on the dial (`result.user_data` in SWML) |
+| chat | `params.user_meta_data` on your agent's config request |
+
+On chat they are read only when the conversation is **created**, so treat them as a snapshot taken at the greeting rather than a live feed. Chat also requires a gateway that forwards the field — `signalwire-python`'s `ChatGateway` does; an older one ignores it and the context simply does not arrive.
 
 #### `capabilities`
 
@@ -490,6 +497,7 @@ The agent-facing contract: what this widget can actually render. Read it to deci
   "capabilities": {
     "widget": "signalwire-address",
     "version": "<widget version>",
+    "medium": "voice",
     "display_content": {
       "formats": ["text", "markdown", "code", "html"],
       "persistent": true,
@@ -503,6 +511,8 @@ The agent-facing contract: what this widget can actually render. Read it to deci
   }
 }
 ```
+
+`medium` is `"voice"` or `"chat"` — which transport *this* payload arrived on. Everything else describes how the widget is **configured**, not what is live right now, so `video: true` on a chat session means an escalation to voice would bring a camera.
 
 #### `metadata`
 
