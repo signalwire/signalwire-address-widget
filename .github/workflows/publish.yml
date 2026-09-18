@@ -11,6 +11,11 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # Trusted publishing (OIDC): npm authenticates the runner from this token,
+    # not a secret. `id-token: write` is what mints it. Configured against this
+    # package on npmjs.com as: org `signalwire`, repo `signalwire-address-widget`,
+    # workflow `publish.yml`. No NPM_TOKEN — classic tokens were revoked in Dec
+    # 2025 and granular ones kept minting with an empty package scope.
     permissions:
       contents: read
       id-token: write
@@ -19,10 +24,16 @@ jobs:
         with:
           fetch-depth: 2
 
+      # Node 24 for npm >= 11.5.1, which is the floor for OIDC publishing.
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
+
+      # setup-node's bundled npm can trail the OIDC floor; pin it up explicitly
+      # so a runner-image bump can't drop us below 11.5.1 silently.
+      - name: Ensure npm supports trusted publishing
+        run: npm install -g npm@latest
 
       - name: Install
         run: npm ci
@@ -51,24 +62,12 @@ jobs:
             echo "Version unchanged ($current) — will publish dev release"
           fi
 
-      # A scoped publish 404s identically whether the token is invalid, belongs
-      # to nobody in the org, or belongs to someone without write access to this
-      # package — npm will not distinguish them. Without this the only way to
-      # tell those apart is to keep minting tokens and guessing.
-      - name: Identify the publishing account
-        continue-on-error: true
-        run: |
-          echo "authenticated as: $(npm whoami 2>&1 || echo '<whoami failed — token invalid or unset>')"
-          echo "write access in @signalwire:"
-          npm access list packages @signalwire 2>&1 | head -20 || true
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
+      # No NODE_AUTH_TOKEN on any publish below: OIDC handles auth, and
+      # provenance is generated automatically for a public repo under trusted
+      # publishing, so the --provenance flag is likewise unnecessary.
       - name: Publish latest
         if: steps.version.outputs.bumped == 'true'
-        run: npm publish --tag latest --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --tag latest --access public
 
       - name: Set dev version
         if: steps.version.outputs.bumped != 'true'
@@ -79,6 +78,4 @@ jobs:
 
       - name: Publish dev
         if: steps.version.outputs.bumped != 'true'
-        run: npm publish --tag dev --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --tag dev --access public
