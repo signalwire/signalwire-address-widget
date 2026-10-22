@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.4.0
+
+Chat UX: discoverability and "it's thinking" feedback.
+
+### Added
+
+- **Typing indicator.** While the agent composes a chat reply — a sent turn,
+  or the conversation opening for its greeting — the transcript tail shows an
+  AI-side bubble with three bouncing dots, sized to match the real bubble so
+  the reply lands where the dots were. Chat only; the voice path already
+  streams a partial. Deliberately NOT shown on restore: a replayed transcript
+  is history, not a reply in flight. New `ChatSession` callback
+  `onAwaitingReply`, new `TranscriptContext.awaiting`, new shadow part
+  `typing`.
+- **Labelled medium-switch pills, both directions.** The voice↔text switch is
+  now a turquoise pill with a text label and a tooltip, rather than a bare
+  icon tucked at the edge of the bar — the switch-to-voice control in the
+  composer and the switch-to-text control in the dock now read as one
+  consistent, self-explaining affordance. Turquoise (the brand's positive
+  signal) keeps them distinct from the red End pill; they collapse to an
+  icon-only circle only when the dock is too narrow. They remain **absent**
+  (not disabled) when a switch isn't possible, so nothing dead is ever shown.
+  New shadow part `switching` for the in-flight status region.
+
+### Changed
+
+- `@signalwire/js` is pinned to `4.0.0-rc.3` (was the floating `rc` tag), so a
+  build is reproducible rather than tracking whatever `rc` points at.
+
 ## 0.2.0
 
 Minor rather than patch: this adds public API, not only fixes.
