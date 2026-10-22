@@ -161,6 +161,69 @@ export class AddressWidget extends LitElement {
         color: var(--sw-address-fg-muted);
         line-height: 1.6;
       }
+
+      /* Medium-switch transition. Claims the whole body and centres one
+         indicator so the old surface is cleared and the change of medium is
+         unmistakable while the new one loads. Turquoise per the brand's
+         positive/active role. */
+      .switching {
+        flex: 1 1 auto;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        padding: 32px;
+        text-align: center;
+        font-family: var(--sw-address-font-body);
+        color: var(--sw-address-fg-default);
+      }
+      .switching-spinner {
+        position: relative;
+        width: 56px;
+        height: 56px;
+      }
+      .switching-spinner::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        border-radius: 50%;
+        border: 3px solid color-mix(in srgb, var(--sw-address-positive) 22%, transparent);
+        border-top-color: var(--sw-address-positive);
+        animation: switching-spin 0.9s linear infinite;
+      }
+      .switching-icon {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--sw-address-positive);
+      }
+      .switching-icon svg {
+        width: 24px;
+        height: 24px;
+        display: block;
+      }
+      .switching-label {
+        font-size: 16px;
+        font-weight: 600;
+      }
+      .switching-sub {
+        font-size: 13px;
+        color: var(--sw-address-fg-muted);
+        max-width: 30ch;
+      }
+      @keyframes switching-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .switching-spinner::before {
+          animation: none;
+        }
+      }
     `
   ];
 
@@ -534,6 +597,14 @@ export class AddressWidget extends LitElement {
   /** A chat turn is in flight (restore, start, or send). */
   @state() private _chatBusy = false;
   /**
+   * The agent is composing a chat reply right now — drives the typing dots.
+   * Distinct from `_chatBusy`, which also covers restore; a restored
+   * transcript is history, not a reply in flight, so it must not animate.
+   * Set by the session (a sent turn, or a greeting opening) and cleared when
+   * the turn settles.
+   */
+  @state() private _chatAwaitingReply = false;
+  /**
    * The overlay is showing the medium picker and nothing has been started.
    * Distinct from "no call yet" — this is a deliberate pause, not a
    * connecting state, and the overlay must not render a call's chrome.
@@ -596,6 +667,14 @@ export class AddressWidget extends LitElement {
    * conversation is moving to text".
    */
   private _switchingMedium = false;
+  /**
+   * Which medium we are switching TO, or null. Drives the full-body
+   * transition screen that clears the old surface so the change of medium is
+   * unmistakable while the new one loads. `@state` because it gates what the
+   * overlay body renders; distinct from the `_switchingMedium` guard, which
+   * only stops a deliberate teardown from closing the overlay.
+   */
+  @state() private _switchTarget: 'voice' | 'chat' | null = null;
   /** One-shot guard so auto-open-on-resume cannot fight the close button. */
   private _chatAutoOpened = false;
   /** One-shot guard for the deferred chat restore — see _maybeRestoreChat. */
@@ -746,11 +825,20 @@ export class AddressWidget extends LitElement {
             this._forgetLastMedium();
           }
         },
+        onAwaitingReply: (awaiting) => {
+          this._chatAwaitingReply = awaiting;
+        },
         onLoading: (loading) => {
           this._chatBusy = loading;
           // The composer is disabled while busy, which blurs it. Restore
           // focus when the turn lands so the next message can just be typed.
-          if (!loading) this._refocusComposer();
+          // The reply (or the failure) has settled here whatever it was, so
+          // this is also the reliable place to retire the typing dots — it
+          // fires at the end of send, greeting and error alike.
+          if (!loading) {
+            this._chatAwaitingReply = false;
+            this._refocusComposer();
+          }
         },
         onError: (message) => {
           this._error = message;
@@ -826,7 +914,10 @@ export class AddressWidget extends LitElement {
     const nonce = this._handoffNonce;
     if (!nonce || !this._chatEnabled()) return;
 
-    this._showBanner({ level: 'info', text: 'Switching to text…' });
+    // The full-body transition screen (driven by `_switchTarget`) is the
+    // visible signal now — it clears the call surface and supersedes the old
+    // top-of-screen info banner.
+    this._switchTarget = 'chat';
 
     // Set BEFORE the request, not inside _handleChatHandoff. /handoff now
     // hangs the call up SERVER-side so its post-prompt fires immediately, so
@@ -854,6 +945,7 @@ export class AddressWidget extends LitElement {
       // The server may already have hung the call up before failing, so the
       // guard has to come off or the widget can never close itself again.
       this._switchingMedium = false;
+      this._switchTarget = null;
       this._showBanner({
         level: 'warning',
         text: "Couldn't switch to text — staying on the call.",
@@ -905,7 +997,8 @@ export class AddressWidget extends LitElement {
       return;
     }
 
-    this._showBanner({ level: 'info', text: 'Switching to text…' });
+    // Transition screen supersedes the old info banner.
+    this._switchTarget = 'chat';
 
     // Set BEFORE teardown: hanging up drives call.status$ to disconnected,
     // which the call-ended subscriber would otherwise read as a reason to
@@ -926,6 +1019,9 @@ export class AddressWidget extends LitElement {
       // Cleared in a finally so a failed handoff cannot leave the widget
       // permanently unable to close itself when a later call ends.
       this._switchingMedium = false;
+      // Chat is up (or the handoff failed) — retire the transition screen so
+      // the transcript + composer show.
+      this._switchTarget = null;
     }
     this._refocusComposer();
   }
@@ -970,7 +1066,9 @@ export class AddressWidget extends LitElement {
     // no summarizer, no waiting on a post-prompt — so this is fast enough
     // that flipping to a connecting poster first just added a flash of
     // empty call UI before the real one.
-    this._showBanner({ level: 'info', text: 'Starting a call…' });
+    // Clear the chat surface behind the transition screen; cleared when the
+    // call joins (see `_startCall`) or on error (see `_surfaceError`).
+    this._switchTarget = 'voice';
 
     // End the chat leg and wait for its summary BEFORE dialing. The agent
     // does the ending and the waiting; we just don't proceed until it says
@@ -1898,6 +1996,10 @@ export class AddressWidget extends LitElement {
           composed: true
         })
       );
+      // The call is live — end any medium-switch transition so the call
+      // surface replaces the "Switching to a voice call" screen. No-op for a
+      // cold dial, where it was never set.
+      this._switchTarget = null;
     } catch (err) {
       console.error('[address-widget] call failed to start', err);
       this._surfaceError(
@@ -2836,6 +2938,8 @@ export class AddressWidget extends LitElement {
 
   private _surfaceError(message: string): void {
     this._error = message;
+    // Any error ends a medium switch — show the error card, not a stuck spinner.
+    this._switchTarget = null;
     if (this._overlayState === 'closed') {
       // Open the overlay to show the error if it wasn't open yet.
       this._previouslyFocused = (document.activeElement as HTMLElement) ?? null;
@@ -3202,7 +3306,12 @@ export class AddressWidget extends LitElement {
     const transcribeEntries = this._transcribeChat.getHistory();
     const aiHasBubble = aiEntries.some((e) => e.kind === 'bubble');
     const entries = aiHasBubble ? aiEntries : transcribeEntries;
-    const hasChat = entries.length > 0;
+    // Awaiting the agent's reply on the text transport — the typing-dots
+    // signal. Voice has its own streaming partial, so this is chat-only.
+    const awaitingReply = this._chatAwaitingReply && this._activeMedium === 'chat';
+    // Render the transcript for the dots even before the first bubble exists,
+    // so the opening greeting animates instead of appearing from nothing.
+    const hasChat = entries.length > 0 || awaitingReply;
     const openContent =
       this._openContentId !== null
         ? this._contentHistory.get(this._openContentId) ?? null
@@ -3233,7 +3342,9 @@ export class AddressWidget extends LitElement {
             onVoice: () => void this._chooseVoice(),
             onChat: () => void this._chooseChat()
           })
-        : html`
+        : this._switchTarget && !this._error
+          ? this._renderSwitching()
+          : html`
       ${this._activeMedium === 'voice'
         ? // Chat has no media, so it must not wear a call's surface. Left
           // unconditional this rendered the pre-call poster and its
@@ -3279,6 +3390,7 @@ export class AddressWidget extends LitElement {
           ? renderTranscript({
               entries,
               visible: true,
+              awaiting: awaitingReply,
               stacked: this._isStacked(),
               scrollRef: this._transcriptRef,
               avatarUrl: this._avatarBroken ? null : this.avatarUrl,
@@ -3329,6 +3441,49 @@ export class AddressWidget extends LitElement {
           : nothing}
         `}
       <span hidden data-chat-version=${this._chatVersion}></span>
+    `;
+  }
+
+  /**
+   * The medium-switch transition screen. Rendered in place of both call and
+   * chat surfaces while `_switchTarget` is set, so the old surface is cleared
+   * and the visitor gets one clear signal that the medium is changing.
+   */
+  private _renderSwitching() {
+    const toVoice = this._switchTarget === 'voice';
+    const icon = toVoice
+      ? html`<svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.79 19.79 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z" />
+        </svg>`
+      : html`<svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+        </svg>`;
+    const label = toVoice ? 'Switching to a voice call' : 'Switching to text chat';
+    const sub = toVoice
+      ? 'Connecting you now — hang tight.'
+      : 'Bringing your conversation across.';
+    return html`
+      <div part="switching" class="switching" role="status" aria-live="polite">
+        <div class="switching-spinner"><div class="switching-icon">${icon}</div></div>
+        <div class="switching-label">${label}</div>
+        <div class="switching-sub">${sub}</div>
+      </div>
     `;
   }
 

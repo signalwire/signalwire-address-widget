@@ -133,31 +133,102 @@ export const controlsStyles = css`
     transition: transform var(--sw-address-duration-fast) var(--sw-address-ease);
   }
 
-  /* Standalone hangup — pill-shaped, destructive red. */
-  /* Switch-to-text. Neutral, not accented: it sits beside End, and two
-     emphasised buttons next to each other make neither read as primary.
-     Turquoise on hover per the brand rule that it marks positive actions. */
+  /* Switch-to-text — a turquoise pill matching the composer's Call button, so
+     the two medium-switches read as one consistent, self-explaining affordance
+     in both directions. Turquoise (the brand's positive signal) keeps it
+     distinct from the red End pill beside it. Collapses to an icon-only circle
+     on a phone, where the floating dock is tight. */
   .btn-switch {
-    width: 48px;
+    position: relative; /* anchor for the tooltip */
     height: 48px;
-    border-radius: 50%;
-    background: var(--sw-address-bg-raised);
-    color: var(--sw-address-fg-default);
+    padding: 0 16px;
+    border-radius: var(--sw-address-radius-pill);
+    border: 1px solid var(--sw-address-positive);
+    background: color-mix(in srgb, var(--sw-address-positive) 12%, var(--sw-address-bg-raised));
+    color: var(--sw-address-positive);
+    font-family: var(--sw-address-font-body);
+    font-size: 14px;
+    font-weight: 600;
+    white-space: nowrap;
     display: inline-flex;
     align-items: center;
-    justify-content: center;
+    gap: 7px;
   }
   .btn-switch:hover:not(:disabled) {
-    color: var(--sw-address-positive);
+    background: color-mix(in srgb, var(--sw-address-positive) 22%, var(--sw-address-bg-raised));
+  }
+  .btn-switch:focus-visible {
+    outline: 2px solid var(--sw-address-brand-blue);
+    outline-offset: 2px;
+    z-index: 1;
   }
   .btn-switch:disabled {
     opacity: 0.4;
     cursor: not-allowed;
   }
   .btn-switch svg {
-    width: 20px;
-    height: 20px;
+    width: 18px;
+    height: 18px;
     display: block;
+  }
+
+  /* Our own tooltip — native ones are slow, unstyled and dead on touch. An
+     inverse surface so it pops against the dark video behind the dock in
+     either theme. Centred above the pill; the dock isn't clipped, so it
+     shows in full. Hover AND keyboard focus. */
+  .btn-switch[data-tooltip]::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: calc(100% + 12px);
+    left: 50%;
+    width: max-content;
+    max-width: 220px;
+    padding: 7px 10px;
+    border-radius: 8px;
+    background: var(--sw-address-fg-default);
+    color: var(--sw-address-bg-surface);
+    font-family: var(--sw-address-font-body);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.35;
+    text-align: center;
+    white-space: normal;
+    box-shadow: var(--sw-address-shadow-md);
+    opacity: 0;
+    transform: translateX(-50%) translateY(4px);
+    pointer-events: none;
+    transition:
+      opacity var(--sw-address-duration-fast) var(--sw-address-ease),
+      transform var(--sw-address-duration-fast) var(--sw-address-ease);
+    z-index: 20;
+  }
+  .btn-switch[data-tooltip]::before {
+    content: '';
+    position: absolute;
+    bottom: calc(100% + 7px);
+    left: 50%;
+    border: 5px solid transparent;
+    border-top-color: var(--sw-address-fg-default);
+    opacity: 0;
+    transform: translateX(-50%) translateY(4px);
+    pointer-events: none;
+    transition:
+      opacity var(--sw-address-duration-fast) var(--sw-address-ease),
+      transform var(--sw-address-duration-fast) var(--sw-address-ease);
+    z-index: 20;
+  }
+  .btn-switch[data-tooltip]:hover::after,
+  .btn-switch[data-tooltip]:hover::before,
+  .btn-switch[data-tooltip]:focus-visible::after,
+  .btn-switch[data-tooltip]:focus-visible::before {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .btn-switch[data-tooltip]::after,
+    .btn-switch[data-tooltip]::before {
+      transition: none;
+    }
   }
 
   .btn-hangup {
@@ -261,6 +332,17 @@ export const controlsStyles = css`
       padding: 0 14px;
     }
     .btn-hangup .hangup-label {
+      display: none;
+    }
+    /* Icon-only on a phone, the same way End drops its label, so the floating
+       dock stays within a 360px screen. */
+    .btn-switch {
+      width: 48px;
+      padding: 0;
+      gap: 0;
+      justify-content: center;
+    }
+    .btn-switch-label {
       display: none;
     }
   }
@@ -495,12 +577,12 @@ export function renderControls(ctx: ControlsContext): TemplateResult {
               part="switch-to-chat"
               class="btn-switch"
               type="button"
-              aria-label="Continue in text chat"
-              title="Continue in text chat"
+              aria-label="Switch to text chat"
+              data-tooltip="Switch to a text-only chat — type instead of talking"
               ?disabled=${!callReady}
               @click=${ctx.onSwitchToChat}
             >
-              ${iconChat}
+              ${iconChat}<span class="btn-switch-label">Chat</span>
             </button>
           `
         : nothing}

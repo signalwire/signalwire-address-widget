@@ -708,6 +708,8 @@ Shadow DOM with SignalWire brand defaults. Theme with CSS custom properties set 
 | `hangup` | Destructive end-call pill. |
 | `transcript` | Transcript panel. |
 | `bubble`, `bubble-ai`, `bubble-user` | Individual chat bubbles. |
+| `typing` | "Agent is composing" indicator (bouncing dots) at the transcript tail. |
+| `switching` | Live status region shown while a voice↔text switch is in flight. |
 | `notice` | System notices in the transcript (timeouts, medium switches). |
 | `insight` | Sidecar insight rows. |
 | `composer`, `composer-input`, `composer-send`, `composer-end` | Text composer and its controls. |

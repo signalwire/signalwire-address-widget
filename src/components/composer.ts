@@ -98,26 +98,33 @@ export const composerStyles = css`
     cursor: not-allowed;
   }
 
-  /* Escalate to voice. Neutral, not accented — sending is the primary action
-     here and two emphasised buttons would make neither read as primary.
-     Turquoise on hover, matching the switch-to-chat button in the call dock. */
+  /* Escalate to voice. A turquoise pill so it reads as the medium-switch
+     affordance and explains itself with a label — turquoise is the brand's
+     positive/active signal, kept distinct from the fuchsia Send and the red
+     End so all three stay legible side by side. Collapses to an icon-only
+     circle on a phone, where a labelled pill will not fit beside the input. */
   .composer-call {
+    position: relative; /* anchor for the tooltip */
     flex: 0 0 auto;
-    width: 48px;
     height: 48px;
+    padding: 0 16px;
     display: inline-flex;
     align-items: center;
-    justify-content: center;
-    border: 1px solid var(--sw-address-border);
-    border-radius: 50%;
-    background: var(--sw-address-bg-raised);
-    color: var(--sw-address-fg-default);
+    gap: 7px;
+    border: 1px solid var(--sw-address-positive);
+    border-radius: var(--sw-address-radius-pill);
+    background: color-mix(in srgb, var(--sw-address-positive) 12%, var(--sw-address-bg-surface));
+    color: var(--sw-address-positive);
+    font-family: var(--sw-address-font-body);
+    font-size: 14px;
+    font-weight: 600;
+    white-space: nowrap;
     cursor: pointer;
-    transition: color var(--sw-address-duration-fast) var(--sw-address-ease);
+    transition: background var(--sw-address-duration-fast) var(--sw-address-ease);
   }
 
   .composer-call:hover {
-    color: var(--sw-address-positive);
+    background: color-mix(in srgb, var(--sw-address-positive) 22%, var(--sw-address-bg-surface));
   }
 
   .composer-call:focus-visible {
@@ -126,9 +133,63 @@ export const composerStyles = css`
   }
 
   .composer-call svg {
-    width: 20px;
-    height: 20px;
+    width: 18px;
+    height: 18px;
     display: block;
+  }
+
+  /* Our own tooltip — the native one is slow, unstyled and dead on touch.
+     An inverse surface (fg-on-bg) so it pops against the dock in either
+     theme. Right-anchored because the pill lives at the composer's right
+     edge; it grows leftward and can't run off-screen. Shows on hover AND
+     keyboard focus. */
+  .composer-call[data-tooltip]::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: calc(100% + 10px);
+    right: 0;
+    width: max-content;
+    max-width: 220px;
+    padding: 7px 10px;
+    border-radius: 8px;
+    background: var(--sw-address-fg-default);
+    color: var(--sw-address-bg-surface);
+    font-family: var(--sw-address-font-body);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.35;
+    text-align: left;
+    white-space: normal;
+    box-shadow: var(--sw-address-shadow-md);
+    opacity: 0;
+    transform: translateY(4px);
+    pointer-events: none;
+    transition:
+      opacity var(--sw-address-duration-fast) var(--sw-address-ease),
+      transform var(--sw-address-duration-fast) var(--sw-address-ease);
+    z-index: 20;
+  }
+  .composer-call[data-tooltip]::before {
+    content: '';
+    position: absolute;
+    bottom: calc(100% + 5px);
+    right: 18px;
+    border: 5px solid transparent;
+    border-top-color: var(--sw-address-fg-default);
+    opacity: 0;
+    transform: translateY(4px);
+    pointer-events: none;
+    transition:
+      opacity var(--sw-address-duration-fast) var(--sw-address-ease),
+      transform var(--sw-address-duration-fast) var(--sw-address-ease);
+    z-index: 20;
+  }
+  .composer-call[data-tooltip]:hover::after,
+  .composer-call[data-tooltip]:hover::before,
+  .composer-call[data-tooltip]:focus-visible::after,
+  .composer-call[data-tooltip]:focus-visible::before {
+    opacity: 1;
+    transform: translateY(0);
   }
 
   /* 48px minimum touch target per the mobile-first rule. Fuchsia because
@@ -217,6 +278,17 @@ export const composerStyles = css`
     .composer-send {
       margin-left: auto;
     }
+    /* Icon-only on a phone: the button row already carries send + end, and a
+       labelled pill would push them off a 360px width. */
+    .composer-call {
+      width: 48px;
+      padding: 0;
+      gap: 0;
+      justify-content: center;
+    }
+    .composer-call-label {
+      display: none;
+    }
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -225,6 +297,11 @@ export const composerStyles = css`
       transition: none;
     }
     .composer-send:hover:not(:disabled) {
+      transform: none;
+    }
+    .composer-call[data-tooltip]::after,
+    .composer-call[data-tooltip]::before {
+      transition: none;
       transform: none;
     }
   }
@@ -295,20 +372,6 @@ export function renderComposer(ctx: ComposerContext): TemplateResult {
         submit(ctx, ctx.inputRef.value);
       }}
     >
-      ${ctx.onSwitchToVoice
-        ? html`
-            <button
-              part="switch-to-voice"
-              class="composer-call"
-              type="button"
-              aria-label="Switch to a voice call"
-              title="Switch to a voice call"
-              @click=${ctx.onSwitchToVoice}
-            >
-              ${callIcon}
-            </button>
-          `
-        : ''}
       <textarea
         ${ref(ctx.inputRef)}
         part="composer-input"
@@ -350,6 +413,20 @@ export function renderComposer(ctx: ComposerContext): TemplateResult {
               @click=${ctx.onEnd}
             >
               ${endIcon}
+            </button>
+          `
+        : ''}
+      ${ctx.onSwitchToVoice
+        ? html`
+            <button
+              part="switch-to-voice"
+              class="composer-call"
+              type="button"
+              aria-label="Switch to a voice call"
+              data-tooltip="Switch to a voice call — talk instead of typing"
+              @click=${ctx.onSwitchToVoice}
+            >
+              ${callIcon}<span class="composer-call-label">Call</span>
             </button>
           `
         : ''}

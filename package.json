@@ -53,7 +53,7 @@
   },
   "dependencies": {
     "@lit/context": "^1.1.0",
-    "@signalwire/js": "rc",
+    "@signalwire/js": "4.0.0-rc.3",
     "@signalwire/web-components": "rc",
     "dompurify": "^3.2.4",
     "lit": "^3.2.1",

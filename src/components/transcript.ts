@@ -26,6 +26,12 @@ export interface TranscriptContext {
   entries: ChatEntry[];
   visible: boolean;
   /**
+   * The agent is composing a reply — render an animated typing indicator at
+   * the tail. Chat-only; the voice path shows its own streaming partial
+   * instead, so this stays false there.
+   */
+  awaiting?: boolean;
+  /**
    * When true, the transcript drops the right-sidebar shape and flows as a
    * full-width vertical panel. Set by AddressWidget in audio-only mode
    * (and implicitly by the mobile media query).
@@ -116,6 +122,48 @@ export const transcriptStyles = css`
   .bubble[data-state='partial'] {
     opacity: 0.7;
     font-style: italic;
+  }
+
+  /* "Agent is composing" — an AI-side bubble holding three bouncing dots.
+     Matches .bubble + .bubble[data-speaker='ai'] geometry so the real reply
+     appears to land in the same spot the dots occupied. */
+  .typing {
+    align-self: flex-start;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 13px 14px;
+    border-radius: 14px;
+    border-top-left-radius: 4px;
+    border-left: 2px solid var(--sw-address-positive);
+    background: var(--sw-address-bg-raised);
+  }
+
+  .typing-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--sw-address-fg-muted);
+    animation: typing-bounce 1.2s ease-in-out infinite;
+  }
+  .typing-dot:nth-child(2) {
+    animation-delay: 0.15s;
+  }
+  .typing-dot:nth-child(3) {
+    animation-delay: 0.3s;
+  }
+
+  @keyframes typing-bounce {
+    0%,
+    60%,
+    100% {
+      transform: translateY(0);
+      opacity: 0.35;
+    }
+    30% {
+      transform: translateY(-4px);
+      opacity: 0.9;
+    }
   }
 
   .bubble[data-state='partial']::after {
@@ -466,6 +514,12 @@ export const transcriptStyles = css`
     .bubble[data-state='partial']::after {
       animation: none;
     }
+    /* Hold the dots steady but still visible, so the indicator reads as
+       present without motion. */
+    .typing-dot {
+      animation: none;
+      opacity: 0.5;
+    }
   }
 `;
 
@@ -624,9 +678,34 @@ export function renderTranscript(ctx: TranscriptContext): TemplateResult {
           if (e.kind === 'notice') return renderNotice(e, i);
           return renderInsight(e, i);
         })}
+        ${ctx.awaiting ? renderTyping(ctx.avatarUrl) : nothing}
       </div>
     </aside>
   `;
+}
+
+/**
+ * The "agent is composing" indicator: three bouncing dots in an AI-side
+ * bubble. Rendered only while `ctx.awaiting` is true and cleared the instant
+ * the reply lands, so it reads as the message being written. Sits under the
+ * agent's avatar when one is configured, exactly where the reply will appear.
+ */
+function renderTyping(avatarUrl?: string | null): TemplateResult {
+  const dots = html`<div
+    part="typing"
+    class="typing"
+    role="status"
+    aria-label="Assistant is typing"
+  >
+    <span class="typing-dot"></span>
+    <span class="typing-dot"></span>
+    <span class="typing-dot"></span>
+  </div>`;
+  if (!avatarUrl) return dots;
+  return html`<div class="bubble-row">
+    <div class="avatar" aria-hidden="true"><img src=${avatarUrl} alt="" /></div>
+    ${dots}
+  </div>`;
 }
 
 /** Helper: auto-scroll a transcript body to the bottom if it has overflow. */

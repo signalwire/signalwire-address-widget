@@ -29,7 +29,7 @@ import { mount } from '@signalwire/address-widget';
 - Element: `<signalwire-address>`
 - UMD global: `SignalWireAddressWidget`
 - CSS var prefix: `--sw-address-*`
-- Shadow parts: `launcher`, `overlay`, `close`, `video-frame`, `local-preview`, `controls`, `hangup`, `transcript`, `bubble`, `bubble-ai`, `bubble-user`, `content-drawer`, `content-drawer-header`, `content-drawer-body`
+- Shadow parts: `launcher`, `overlay`, `close`, `video-frame`, `local-preview`, `controls`, `hangup`, `transcript`, `bubble`, `bubble-ai`, `bubble-user`, `typing`, `switching`, `content-drawer`, `content-drawer-header`, `content-drawer-body`
 
 ## Event subscription rule
 

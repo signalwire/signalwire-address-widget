@@ -71,6 +71,14 @@ export interface ChatSessionCallbacks {
   onError(message: string | null): void;
   /** Fired once when a stored handle successfully replayed a conversation. */
   onResumed(): void;
+  /**
+   * The agent is composing a reply *now* — a turn was just sent, or the
+   * conversation is opening for its greeting. Deliberately NOT fired on
+   * restore: a replayed transcript is history that already happened, not a
+   * reply in flight, and must not animate a typing indicator. The consumer
+   * clears it when the turn settles (see `onLoading(false)`).
+   */
+  onAwaitingReply?(awaiting: boolean): void;
 }
 
 export class ChatSession {
@@ -316,6 +324,8 @@ export class ChatSession {
   /** Shared body of start-a-conversation, with or without an existing handle. */
   private async openConversation(keepHandle: boolean): Promise<void> {
     const client = this.client!;
+    // A greeting is a reply too — light the typing indicator while it composes.
+    this.cb.onAwaitingReply?.(true);
     if (!keepHandle) {
       // Without this an "always new" start would ride an existing handle and
       // silently continue the old conversation.
@@ -342,6 +352,7 @@ export class ChatSession {
     if (!client || !trimmed) return;
 
     this.cb.onUser(trimmed);
+    this.cb.onAwaitingReply?.(true);
     this.cb.onLoading(true);
     this.cb.onError(null);
 
