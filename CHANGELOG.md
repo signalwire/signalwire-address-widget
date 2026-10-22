@@ -26,8 +26,11 @@ Chat UX: discoverability and "it's thinking" feedback.
 
 ### Changed
 
-- `@signalwire/js` is pinned to `4.0.0-rc.3` (was the floating `rc` tag), so a
-  build is reproducible rather than tracking whatever `rc` points at.
+- `@signalwire/js` and `@signalwire/web-components` are both pinned to
+  `4.0.0-rc.3` (were the floating `rc` tag), so a build is reproducible rather
+  than tracking whatever `rc` points at. They must move together:
+  web-components peer-requires the exact same `@signalwire/js` version, and a
+  mismatch fails `npm ci` with ERESOLVE — which is why 0.4.0 never published.
 
 ## 0.2.0
 
