@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0
+## 0.4.1
 
 Chat UX: discoverability and "it's thinking" feedback.
 
