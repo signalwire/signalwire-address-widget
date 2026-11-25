@@ -142,6 +142,8 @@ Three fields are worth branching on:
 
 `metadata` carries session context in three buckets (`page`, `client`, `widget`) — URL, referrer, platform, locale, timezone, viewport, accessibility preferences, widget version and theme. When the host page collects recording consent, `metadata.consent` and a top-level `metadata.no_training` flag ride along with it. Full shape in [README.md](./README.md#auto-populated-payloads).
 
+`metadata.visitor_id` identifies the browser: a random ID assigned on its first visit and kept across reloads and return visits, or the host page's own ID when it sets `visitor-id`. It is the same on voice and chat, so the two halves of a switched conversation share it. Use it to recognise a returning caller or to stitch transcripts together, and expect it to change when the visitor clears site data. The browser supplies it, so it is a hint, never authentication.
+
 ### On chat, this is a snapshot — not a feed
 
 The chat service reads `user_meta_data` **only when it creates the conversation**: the `start` call, or whichever message auto-creates when nothing was started. An already-open conversation does not re-fetch its config, so metadata on later turns is accepted and discarded.

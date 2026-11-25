@@ -220,6 +220,16 @@ export interface WidgetOptions {
    */
   autoIdentify?: boolean;
   /**
+   * Who this visitor is, sent as `metadata.visitor_id` with every call and
+   * chat. Omit it and the widget assigns one random id per browser (kept in
+   * localStorage, shared by every widget on the site) so an agent can
+   * recognise a returning caller. Pass it when the page already knows the
+   * visitor, such as a signed-in user's id, and that value is sent instead.
+   * Sent only while `autoIdentify` is on. Browser-supplied either way, so an
+   * agent should treat it as a hint, never as proof of identity.
+   */
+  visitorId?: string;
+  /**
    * Stable identifier for this widget instance. Scopes the
    * sessionStorage entries the widget uses for reattach across page
    * reloads. When omitted, an auto-id of `address-widget-<N>` is

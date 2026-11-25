@@ -94,6 +94,7 @@ export function mount(target: Target, options: WidgetOptions): AddressWidget {
   if (options.autoGainControl !== undefined) widget.autoGainControl = options.autoGainControl;
   if (options.inputVolume !== undefined) widget.inputVolume = options.inputVolume;
   if (options.autoIdentify !== undefined) widget.autoIdentify = options.autoIdentify;
+  if (options.visitorId !== undefined) widget.visitorId = options.visitorId;
   if (options.nodeId !== undefined) widget.nodeId = options.nodeId;
   if (options.debug !== undefined) widget.debug = options.debug;
   if (options.widgetId !== undefined) widget.widgetId = options.widgetId;

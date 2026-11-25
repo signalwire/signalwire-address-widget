@@ -241,6 +241,7 @@ All chat options are inert unless [chat is enabled](#modes-voice-chat-and-both).
 | Attribute | Property | Type | Default | Description |
 |---|---|---|---|---|
 | `auto-identify` | `autoIdentify` | boolean | `true` | Auto-populate `capabilities` and `metadata` into userVariables at dial time. See [Passing data to the agent](#passing-data-to-the-agent). |
+| `visitor-id` | `visitorId` | string | random, per browser | Sent as `metadata.visitor_id` on every call and chat. Leave unset to use the widget's own per-browser ID; set it to send your own (e.g. a signed-in user's ID). See [`visitor_id`](#visitor_id). Not reflected to the DOM. |
 | `user-variables` | `userVariablesAttr` | JSON string / object | `{}` | Arbitrary data passed to the destination. Note the property name differs from the attribute. |
 | `widget-id` | `widgetId` | string | auto | Stable id scoping this widget's `sessionStorage` entries. Defaults to `address-widget-<N>` by document order. Set it explicitly when the widget's DOM position can shift between reloads (CMS layouts, dynamic lists). |
 | `auto-reattach` | `autoReattach` | boolean | `true` | Reattach to a live call after a page reload. See [reattach](#chat-persistence-and-call-reattach). |
@@ -516,11 +517,12 @@ The agent-facing contract: what this widget can actually render. Read it to deci
 
 #### `metadata`
 
-Session context, in three buckets:
+Who the visitor is, and the session context in three buckets:
 
 ```json
 {
   "metadata": {
+    "visitor_id": "3f2b8c1e-9a4d-4e7f-b2c6-5d1e8f0a7b93",
     "page":   { "url": "…", "title": "…", "referrer": "…" },
     "client": {
       "user_agent": "…", "platform": "macOS", "language": "en-US",
@@ -540,6 +542,15 @@ Session context, in three buckets:
 ```
 
 Set `auto-identify="false"` to send neither. Consent, when given, is still attached under `metadata.consent`.
+
+#### `visitor_id`
+
+A random ID the widget assigns the first time a browser loads it, so your agent can recognise a returning caller. It is the same on every call and chat from that browser, on both halves of a voice↔text switch, and for every widget on your site. Ignore it if you don't need it.
+
+- **Where it lives.** In `localStorage`, under `swaw:visitor`, on your site's origin. Clearing site data or using a private window gives the visitor a new one.
+- **What it isn't.** A device fingerprint: it is generated at random, not computed from the browser's characteristics. And not proof of identity: the browser sends it, so anyone can send any value. Use it to personalise or to stitch transcripts together, never to authorise anything.
+- **Supplying your own.** If the page already knows who the visitor is, pass `visitor-id="user-123"` (or `visitorId` to `mount()`). That value is sent instead, and nothing is stored.
+- **Privacy.** It is a persistent identifier in the visitor's browser. Where that needs consent (GDPR/ePrivacy regions), cover it in your site's consent flow, or set `auto-identify="false"`, which turns it off along with the rest of `metadata` and never writes it.
 
 ---
 

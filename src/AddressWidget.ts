@@ -50,6 +50,7 @@ import { mediumPickerStyles, renderMediumPicker } from './components/medium-pick
 import { wireCallEvents } from './lib/events';
 import { detectPlatform, safeTimezone, safeMatchMedia } from './lib/env';
 import { readConsent, writeConsent } from './lib/consent';
+import { getVisitorId } from './lib/visitor';
 import { MicLevelMeter } from './lib/mic-level';
 import type { ConsentRecord } from './lib/consent';
 import {
@@ -440,6 +441,19 @@ export class AddressWidget extends LitElement {
    */
   @property({ attribute: 'auto-identify', reflect: true, converter: boolDefaultTrue })
   autoIdentify = true;
+
+  /**
+   * Who this visitor is, sent as `metadata.visitor_id` with every call and
+   * chat. Leave it unset and the widget assigns one random id per browser,
+   * kept in localStorage and shared by every widget on the site, so an agent
+   * can recognise a returning caller. Set it when the page already knows the
+   * visitor (a signed-in user's id) and that value is sent instead, and
+   * nothing is stored. Part of the auto-identify block:
+   * `auto-identify="false"` sends neither. Not reflected to the DOM, since a
+   * host-supplied id may well identify a person.
+   */
+  @property({ attribute: 'visitor-id' })
+  visitorId = '';
 
   /**
    * Stable identifier for this widget instance. Used to scope
@@ -3223,6 +3237,12 @@ export class AddressWidget extends LitElement {
    */
   private _buildMetadata(): Record<string, unknown> {
     const meta: Record<string, unknown> = {
+      // Read here, not at connect, so a page with auto-identify off never
+      // mints or stores one. Top-level rather than in `client` because it
+      // outlives any one page view and is the field an agent keys on.
+      // String() because a host may assign a numeric user id, or null, from
+      // script rather than through the attribute.
+      visitor_id: String(this.visitorId ?? '').trim() || getVisitorId(),
       widget: {
         version: __WIDGET_VERSION__,
         opened_at: new Date().toISOString(),
