@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.0
+
+### Added
+
+- **`metadata.visitor_id`** — a random ID assigned the first time a browser
+  loads the widget and sent with every call (`userVariables`) and chat
+  (`user_meta_data`), so an agent can recognise a returning caller or stitch a
+  visitor's transcripts together. Kept in `localStorage` (`swaw:visitor`), so
+  it survives reloads and return visits and is shared by every widget on the
+  origin; the voice and chat halves of a switched conversation carry the same
+  value. Generated at random, not computed from the device, and supplied by
+  the browser, so agents should treat it as a hint, never as authentication.
+  Set `visitor-id` (or `visitorId` to `mount()`) to send the page's own ID,
+  such as a signed-in user's, instead. `auto-identify="false"` turns it off
+  and never writes it.
+
 ## 0.4.1
 
 Chat UX: discoverability and "it's thinking" feedback.
